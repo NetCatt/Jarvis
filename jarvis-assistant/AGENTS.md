@@ -14,9 +14,13 @@
 - **Senior Integration & QA Engineer**: Google Tasks OAuth CRUD, webhook standup dispatches, Git bounded inspection, CLI hooks.
 
 ## 2b. Voice Pipeline (offline, English-only)
-- Capture: `webrtcvad`-gated recording in `main.py` (`_capture_audio_vad`) — starts on detected speech, stops after trailing silence, bounded by `VAD_MAX_DURATION_SEC`. No more fixed-duration clips.
+- Capture: `webrtcvad`-gated recording in `main.py` (`_capture_audio_vad`) — two independent budgets, not one shared cap: `VAD_LISTEN_TIMEOUT_SEC` (how long to wait silently for speech to start) and `VAD_MAX_DURATION_SEC` (how long an utterance may run ONCE SPEECH STARTS, counted from the trigger — not from when listening began). The old bug counted both phases against a single cap, truncating longer sentences mid-word whenever any time was spent waiting before Fas started talking. `VAD_MAX_DURATION_SEC` defaults high (120s) — it's a safety backstop against a stuck mic, not a real conversational limit; actual end-of-utterance is purely silence-based (`VAD_SILENCE_MS`).
 - STT: `vosk` (`vosk-model-small-en-us-0.15`, Kaldi/C++ backend) — fully offline, no API quota, and **structurally English-only** (the model has no other-language vocabulary, so it cannot mistranscribe into another language the way the old free Google Web Speech API did).
 - Defense-in-depth: `brain.py`'s system prompt hard-locks replies to English regardless of apparent input language.
+
+## 2b-2. Agentic Behavior (plan-then-act, not plan-then-describe)
+- `brain.converse()` runs a bounded multi-step loop (`MAX_AGENTIC_STEPS`, default 3), not a single round trip: a tool call's result is fed back so Mike can call another tool or give a final synthesized reply — but only for tools in `_CHAINABLE_TOOLS` (currently just `dispatch_coding_agent`). Every other tool (tasks, apps, media, agenda checks) returns immediately after one call, same as before — this is what keeps common commands fast; chaining costs a real extra Gemini round trip, so it's reserved for genuine investigate-then-act flows.
+- The system prompt enforces a hard rule: when Fas describes a problem or asks what Mike will do about something, the next action MUST be a real tool call in that same turn — "I'll look into it" with no accompanying tool call is treated as a failure, not an acceptable reply. Verified empirically (not just by reading the prompt) at `temperature=0.2`: 4/4 trials produced a real tool call instead of promise-only text.
 
 ## 2c. Memory (three tiers, `jarvis-assistant/memory/`, one SQLite file in WAL mode)
 1. **Working memory** (`active_state` table) — current project/topic/open threads, always loaded in full every turn, updated deterministically after each exchange.

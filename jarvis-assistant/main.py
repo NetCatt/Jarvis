@@ -62,35 +62,54 @@ def _get_vosk_model():
     return _VOSK_MODEL
 
 
-def _capture_audio_vad(rate: int = 16000, frame_ms: int = 20, max_duration: float = 10.0, silence_ms: int = 700) -> bytes:
-    """Record one utterance gated by WebRTC VAD: starts on detected speech, stops after trailing silence."""
+def _capture_audio_vad(rate: int = 16000, frame_ms: int = 20) -> bytes:
+    """Record one utterance gated by WebRTC VAD.
+
+    Two independent budgets, NOT one shared cap: `VAD_LISTEN_TIMEOUT_SEC` is how long to wait
+    silently for speech to start (gives up and returns empty if nothing is said), and
+    `VAD_MAX_DURATION_SEC` is how long an utterance may run ONCE SPEECH STARTS. Counting both
+    phases against a single cap (the old bug) truncated longer sentences mid-word whenever any
+    time was spent waiting before Fas started talking.
+    """
     import sounddevice as sd
     import webrtcvad
 
-    vad = webrtcvad.Vad(int(os.getenv("VAD_MODE", "2")))
+    vad = webrtcvad.Vad(int(os.getenv("VAD_MODE", "1")))
     frame_len = int(rate * frame_ms / 1000)
-    max_frames = int(max_duration * 1000 / frame_ms)
-    silence_frames_needed = max(1, int(silence_ms / frame_ms))
+    pre_trigger_max_frames = int(float(os.getenv("VAD_LISTEN_TIMEOUT_SEC", "8")) * 1000 / frame_ms)
+    post_trigger_max_frames = int(float(os.getenv("VAD_MAX_DURATION_SEC", "20")) * 1000 / frame_ms)
+    silence_frames_needed = max(1, int(int(os.getenv("VAD_SILENCE_MS", "900")) / frame_ms))
 
     frames: list[bytes] = []
     triggered = False
     silence_count = 0
+    pre_count = 0
+    post_count = 0
     with sd.InputStream(samplerate=rate, channels=1, dtype="int16", blocksize=frame_len) as stream:
-        for _ in range(max_frames):
+        while True:
             data, _ = stream.read(frame_len)
             pcm_bytes = data.tobytes()
             if len(pcm_bytes) < frame_len * 2:
                 continue
             is_speech = vad.is_speech(pcm_bytes, rate)
+            if not triggered:
+                pre_count += 1
+                if is_speech:
+                    triggered = True
+                    frames.append(pcm_bytes)
+                elif pre_count >= pre_trigger_max_frames:
+                    return b""
+                continue
+            frames.append(pcm_bytes)
+            post_count += 1
             if is_speech:
-                frames.append(pcm_bytes)
-                triggered = True
                 silence_count = 0
-            elif triggered:
-                frames.append(pcm_bytes)
+            else:
                 silence_count += 1
                 if silence_count >= silence_frames_needed:
                     break
+            if post_count >= post_trigger_max_frames:
+                break
     return b"".join(frames)
 
 

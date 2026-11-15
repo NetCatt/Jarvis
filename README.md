@@ -106,7 +106,8 @@ FISH_AUDIO_MODEL_ID=model_id   # Fish Audio model reference ID (Ross)
 
 # Offline Voice Capture (VAD + Vosk, English-only STT)
 VOSK_MODEL_PATH=models/vosk-model-small-en-us-0.15
-VAD_MODE=2
+VAD_MODE=1                     # 0-3, lower = more lenient (fewer false "silence" cutoffs mid-sentence)
+VAD_MAX_DURATION_SEC=120        # safety backstop once speech starts, not a real conversational limit
 
 # Memory (three-tier)
 MEMORY_DB_PATH=data/memory.db

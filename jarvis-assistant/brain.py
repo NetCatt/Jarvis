@@ -17,6 +17,10 @@ load_dotenv()
 _CLIENT = None
 DEFAULT_SESSION = "default"
 _LAST_DECAY_DATE = None
+# Tools that may need a follow-up decision (investigate/act, then report back in Mike's own words)
+# instead of returning their raw string immediately. Keep this small — every entry costs an extra
+# Gemini round trip, which is exactly the latency the fast path below exists to avoid.
+_CHAINABLE_TOOLS = {"dispatch_coding_agent"}
 
 BASE_PROMPT = (
     "You are Mike Ross (nickname Mike), an AI Technical Project Lead and Windows 10 orchestrator for Fas. "
@@ -44,6 +48,14 @@ BASE_PROMPT = (
     "When Fas asks you to build, fix, refactor, or architect actual code (not a simple local command), use "
     "dispatch_coding_agent(task, agent, repo_path) choosing agent='ml-engineer' for data/model/training work, "
     "agent='architect' for design/structure/planning work, or leave agent empty for general coding tasks. "
+    "RULE, no exceptions: when Fas describes a problem or asks what you're going to do about something, your "
+    "very next action MUST be a tool call, never plain text. Saying 'I'll look into it', 'let me check', or "
+    "'I'll inspect X' without an accompanying tool call in the SAME turn is a failure — Fas cannot see what you "
+    "silently intend to do, only what you actually call. Concretely: for a real engineering/technical problem, "
+    "call dispatch_coding_agent in this turn — don't promise to; if you need to check current state first, call "
+    "list_agenda or sync_coding_progress — don't describe checking it. Plain text alone is only acceptable once "
+    "a tool has already run (this turn or a prior one) and you are reporting its real result, or once you've "
+    "concluded no tool genuinely applies. "
     "Return crisp, spoken replies (max 2 sentences, no markdown symbols). "
     "ALWAYS reply in English, regardless of the apparent language of the input text. If the input looks garbled, "
     "nonsensical, or like a transcription error, say you didn't catch that and ask Fas to repeat it in English — "
@@ -114,7 +126,10 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
 
 
 def converse(session_id: str, user_text: str) -> str:
-    """Stateful multi-turn conversation: real working/fact memory + episodic recall, single Gemini RTT."""
+    """Stateful multi-turn conversation with a bounded agentic loop: Mike can check state with one
+    tool, act on what he finds with another (e.g. dispatch_coding_agent), and only then report back
+    in his own words — instead of stopping after one tool call or just describing a plan without
+    executing it."""
     client = _get_client()
     system_prompt = _build_system_prompt(session_id, user_text)
     history = recent_turns(session_id, n=int(os.getenv("SHORT_TERM_TURN_WINDOW", "6")))
@@ -126,28 +141,48 @@ def converse(session_id: str, user_text: str) -> str:
 
     cfg = types.GenerateContentConfig(
         system_instruction=system_prompt,
-        temperature=0.4,
+        temperature=0.2,
         tools=TOOL_FUNCTIONS,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
     reply = "Command processing failed."
-    is_tool_call = False
-    for model in _models():
-        try:
-            resp = client.models.generate_content(model=model, contents=contents, config=cfg)
-            if resp.function_calls:
-                call = resp.function_calls[0]
-                fn = TOOL_MAP.get(call.name)
-                reply = str(fn(**(call.args or {}))) if fn else f"Unknown tool: {call.name}"
-                is_tool_call = True
-            else:
-                reply = (resp.text or "Done.").strip().replace("*", "")
+    steps_taken = 0
+    chained = False
+    max_steps = int(os.getenv("MAX_AGENTIC_STEPS", "3"))
+    for _ in range(max_steps):
+        resp = None
+        for model in _models():
+            try:
+                resp = client.models.generate_content(model=model, contents=contents, config=cfg)
+                break
+            except Exception as exc:
+                reply = f"Brain router error: {exc}"
+        if resp is None:
             break
-        except Exception as exc:
-            reply = f"Brain router error: {exc}"
-            continue
+        if resp.function_calls:
+            call = resp.function_calls[0]
+            fn = TOOL_MAP.get(call.name)
+            result = str(fn(**(call.args or {}))) if fn else f"Unknown tool: {call.name}"
+            reply = result
+            steps_taken += 1
+            # Only tools that genuinely warrant a follow-up decision (investigate/act, possibly
+            # chained again, then report back) pay for a second round trip. The common instant
+            # commands (tasks, apps, media, agenda checks) return immediately like before — this
+            # is what keeps those fast; only chain for the ones that need real multi-step reasoning.
+            if call.name in _CHAINABLE_TOOLS:
+                chained = True
+                contents.append(types.Content(role="model", parts=[types.Part.from_function_call(name=call.name, args=call.args or {})]))
+                contents.append(types.Content(role="user", parts=[types.Part.from_function_response(name=call.name, response={"result": result})]))
+                continue
+            break
+        reply = (resp.text or "Done.").strip().replace("*", "")
+        break
 
-    if not is_tool_call:
+    # A single, immediate tool call with no further reasoning is the old fast path (play music, add
+    # a task, etc.) — skip memory for it. Anything chained across multiple steps, or ended in
+    # synthesized text, reflects real conversation/problem-solving and is worth remembering.
+    is_simple_fast_path = steps_taken >= 1 and not chained
+    if not is_simple_fast_path:
         append_turn(session_id, "user", user_text, embed(user_text))
         append_turn(session_id, "mike", reply, embed(reply))
         _extract_state_update(session_id, user_text, reply)
