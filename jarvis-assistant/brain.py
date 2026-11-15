@@ -13,7 +13,10 @@ PROMPT = (
     "Always address the user as Fas when speaking. "
     "Sync repo progress via sync_coding_progress. Manage Google Tasks via add_task, update_task_progress, "
     "complete_task, list_agenda. Plan next agent steps via write_agent_plan. "
-    "Launch apps via open_app. Play media via play_youtube or play_spotify. "
+    "When asked to play a song or music, use play_music(song, platform). If platform is not specified, leave platform empty so Mike asks whether Spotify or YouTube. "
+    "If Fas answers 'Spotify', 'YouTube', 'on Spotify', or 'on YouTube', always route to play_music(song='', platform=...) instead of open_app. "
+    "When asked to search something on Google or browser, use search_google(query). "
+    "When asked to open the browser or a website, use open_browser(url). Launch desktop apps via open_app. "
     "Return crisp, spoken replies (max 2 sentences, ∅ markdown symbols)."
 )
 
@@ -32,7 +35,7 @@ def route_command(user_text: str) -> str:
         system_instruction=PROMPT, temperature=0.0, tools=TOOL_FUNCTIONS,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
     )
-    for model in (os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")):
+    for model in (os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")):
         try:
             resp = client.models.generate_content(model=model, contents=user_text, config=cfg)
             if resp.function_calls:

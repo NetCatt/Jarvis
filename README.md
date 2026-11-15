@@ -135,6 +135,20 @@ Ask questions or execute commands:
 ```bash
 mike --ask "what is my agenda"
 mike --ask "add task implement redis caching to my agenda"
+mike --ask "search Google for python 3.14 features"
+mike --ask "open browser"
+mike --ask "open vscode"
+```
+
+Interactive music routing (Spotify vs. YouTube):
+```bash
+# Requesting music without specifying platform prompts for preference:
+mike --ask "play Bohemian Rhapsody"
+# Response: "Would you like to play Bohemian Rhapsody on Spotify or YouTube, Fas?"
+
+# Follow up with platform:
+mike --ask "Spotify"     # Opens native Spotify app and searches query
+mike --ask "on YouTube"   # Opens YouTube search in default browser
 ```
 
 Sync coding progress manually for any project:

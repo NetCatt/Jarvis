@@ -1,10 +1,11 @@
 import os
 import subprocess
 
+_SPOTIFY_EXE = os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe")
 APP_MAP = {
     "vscode": "code",
     "antigravity": "antigravity",
-    "spotify": "spotify",
+    "spotify": _SPOTIFY_EXE if os.path.exists(_SPOTIFY_EXE) else "spotify",
     "firefox": "firefox",
     "edge": "msedge",
     "terminal": "wt",

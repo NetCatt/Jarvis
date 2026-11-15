@@ -1,6 +1,6 @@
 from tools.apps import open_app
 from tools.dev_sync import sync_coding_progress
-from tools.media import play_spotify, play_youtube
+from tools.media import open_browser, play_music, play_spotify, play_youtube, search_google
 from tools.planner import write_agent_plan
 from tools.tasks import add_task, complete_task, list_agenda, update_task_progress
 
@@ -12,6 +12,9 @@ TOOL_FUNCTIONS = [
     complete_task,
     write_agent_plan,
     open_app,
+    open_browser,
+    search_google,
+    play_music,
     play_youtube,
     play_spotify,
 ]
