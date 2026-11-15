@@ -9,7 +9,8 @@ IS_ACTIVE = True
 
 def _speak_mci(tmp_mp3: str) -> None:
     mci = ctypes.windll.winmm.mciSendStringW
-    mci(f'open "{tmp_mp3}" type mpegvideo alias reply_audio', None, 0, 0)
+    win_p = os.path.normpath(tmp_mp3)
+    mci(f'open "{win_p}" type mpegvideo alias reply_audio', None, 0, 0)
     mci("play reply_audio wait", None, 0, 0)
     mci("close reply_audio", None, 0, 0)
     if os.path.exists(tmp_mp3):
@@ -75,12 +76,16 @@ def listen_and_execute() -> None:
     import speech_recognition as sr
     from voice_gate import check_hotkey_toggle
     r = sr.Recognizer()
-    print("[Mike]: Online. Listening for Fas (Press F9 for Standby)...")
-    speak("Mike Ross online. Ready for Fas.")
+    user = os.getenv("USER_NAME", "Fas")
+    name = os.getenv("ASSISTANT_NAME", "Mike Ross")
+    greeting = f"Hello {user}. {name} is online and ready."
+    print(f"\n[Mike]: {greeting}")
+    print("[Mike]: Listening for voice commands... (Press F9 for Standby, Ctrl+C to quit)\n")
+    speak(greeting)
     while True:
         if check_hotkey_toggle(int(os.getenv("OPTIONAL_TOGGLE_KEY_HEX", "0x78"), 16)):
             IS_ACTIVE = not IS_ACTIVE
-            speak("Active mode, Fas" if IS_ACTIVE else "Standby mode, Fas")
+            speak(f"Active mode, {user}" if IS_ACTIVE else f"Standby mode, {user}")
         if IS_ACTIVE:
             _process_audio(r)
 
