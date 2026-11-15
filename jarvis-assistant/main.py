@@ -17,12 +17,31 @@ def _speak_mci(tmp_mp3: str) -> None:
         os.remove(tmp_mp3)
 
 
+def _speak_fish(text: str, tmp_mp3: str) -> bool:
+    key, mid = os.getenv("FISH_AUDIO_KEY"), os.getenv("FISH_AUDIO_MODEL_ID")
+    if not key or not mid:
+        return False
+    import json, urllib.request
+    payload = json.dumps({"text": text, "reference_id": mid, "format": "mp3"}).encode("utf-8")
+    req = urllib.request.Request("https://api.fish.audio/v1/tts", data=payload, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "model": "s2.1-pro-free"})
+    with urllib.request.urlopen(req, timeout=8.0) as resp:
+        with open(tmp_mp3, "wb") as f:
+            f.write(resp.read())
+    _speak_mci(tmp_mp3)
+    return True
+
+
 def speak(text: str) -> None:
-    """Low-latency edge-tts via winmm.dll mciSendStringW with native Windows SAPI fallback."""
+    """TTS via Fish Audio clone, with Edge-TTS and native Windows SAPI fallback."""
     if not text.strip():
         return
-    voice = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
     tmp_mp3 = os.path.abspath("temp_reply.mp3")
+    try:
+        if os.getenv("TTS_ENGINE", "").lower() == "fish_audio" and _speak_fish(text, tmp_mp3):
+            return
+    except Exception:
+        pass
+    voice = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
     try:
         import edge_tts
         asyncio.run(edge_tts.Communicate(text, voice).save(tmp_mp3))
