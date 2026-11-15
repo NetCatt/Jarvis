@@ -25,6 +25,8 @@
 
 Deterministic one-shot commands (tasks, apps, media) bypass memory entirely — only genuine conversational turns are stored/recalled.
 
+Compaction and fact decay run automatically (`brain._maybe_run_memory_upkeep`, called after every conversational turn) — compaction no-ops cheaply under its threshold so it's safe to call every turn, decay is throttled to once per calendar day per process. `jarvis_cli.py --reflect` remains available to force both manually.
+
 ## 2d. Agent Dispatch (`tools/dispatch.py`)
 - `dispatch_coding_agent(task, agent, repo_path)` shells out to the Claude Code CLI headlessly (`claude -p ... --output-format json`), bundled inside the VS Code extension at `%USERPROFILE%\.vscode\extensions\anthropic.claude-code-*\resources\native-binary\claude.exe` (auto-discovered, or set `CLAUDE_CLI_PATH`).
 - `agent='ml-engineer'` or `agent='architect'` (mapped to the CLI's `Plan` agent — there is no literal `architect` agent in this account's setup); empty routes to the default agent.

@@ -22,7 +22,7 @@ def main() -> None:
     load_dotenv()
     from brain import converse
     from main import speak
-    from memory.store import compact, top_facts, get_active_state
+    from memory.store import compact, decay_facts, top_facts, get_active_state
     from memory.retrieval import recall
     from tools.dev_sync import sync_coding_progress
 
@@ -34,7 +34,8 @@ def main() -> None:
         return
     if args.reflect:
         compact(args.session)
-        print(f"[Mike]: Memory compacted for session '{args.session}'.")
+        decay_facts()
+        print(f"[Mike]: Memory compacted and facts decayed for session '{args.session}'.")
         return
     if args.sync_git or args.agent_report:
         reply = sync_coding_progress(agent_note=args.agent_report, repo_path=args.repo)

@@ -8,7 +8,7 @@ from google.genai import types
 
 from memory.embeddings import embed
 from memory.retrieval import recall
-from memory.store import append_turn, get_active_state, recent_turns, top_facts, update_active_state, upsert_fact
+from memory.store import append_turn, compact, decay_facts, get_active_state, recent_turns, top_facts, update_active_state, upsert_fact
 from tools import TOOL_FUNCTIONS, TOOL_MAP
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -16,6 +16,7 @@ load_dotenv(env_path)
 load_dotenv()
 _CLIENT = None
 DEFAULT_SESSION = "default"
+_LAST_DECAY_DATE = None
 
 BASE_PROMPT = (
     "You are Mike Ross (nickname Mike), an AI Technical Project Lead and Windows 10 orchestrator for Fas. "
@@ -150,7 +151,19 @@ def converse(session_id: str, user_text: str) -> str:
         append_turn(session_id, "user", user_text, embed(user_text))
         append_turn(session_id, "mike", reply, embed(reply))
         _extract_state_update(session_id, user_text, reply)
+        _maybe_run_memory_upkeep(session_id)
     return reply
+
+
+def _maybe_run_memory_upkeep(session_id: str) -> None:
+    """Compaction is cheap to call every turn (it no-ops under the keep_last threshold).
+    Decay is a full facts-table scan, so it's throttled to once per calendar day per process."""
+    global _LAST_DECAY_DATE
+    compact(session_id, keep_last=int(os.getenv("SHORT_TERM_TURN_WINDOW", "6")) * 3)
+    today = datetime.date.today()
+    if _LAST_DECAY_DATE != today:
+        decay_facts()
+        _LAST_DECAY_DATE = today
 
 
 def route_command(user_text: str) -> str:
