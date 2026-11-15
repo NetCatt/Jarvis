@@ -1,0 +1,9 @@
+.env
+credentials.json
+token.json
+*.voice
+.venv/
+__pycache__/
+*.pyc
+temp_reply.mp3
+NEXT_PLAN.md

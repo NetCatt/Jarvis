@@ -1,0 +1,86 @@
+import datetime
+import json
+import os
+import subprocess
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from tools.notify import send_summary
+from tools.tasks import add_task, get_open_tasks_raw, get_service_and_list_id
+
+load_dotenv()
+
+
+def _run_git(path: str, args: list[str]) -> str:
+    try:
+        return subprocess.check_output(["git", "-C", path] + args, stderr=subprocess.DEVNULL, timeout=3.0, text=True, errors="ignore").strip()[:1500]
+    except Exception:
+        return ""
+
+
+def get_repo_snapshot(repo_path: str) -> dict:
+    """Read git state & first 60 lines of local plan."""
+    status, commits = _run_git(repo_path, ["status", "-s"]), _run_git(repo_path, ["log", "-n", "3", "--oneline"])
+    diff = _run_git(repo_path, ["diff", "--stat", "HEAD~1"])
+    plan = ""
+    for f in ("NEXT_PLAN.md", "PLAN.md", "TODO.md"):
+        p = os.path.join(repo_path, f)
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8", errors="ignore") as fp:
+                plan = fp.read(1200)
+            break
+    return {"status": status, "commits": commits, "diff": diff, "plan": plan}
+
+
+def _ask_gemini_reconcile(snap: dict, tasks: list[dict], agent_note: str) -> dict:
+    """Query Gemini 3.8 Flash in JSON mode for task reconciliation."""
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    prompt = (
+        f"Reconcile code with Google Tasks.\nAgent Note: {agent_note or 'Inspect Git'}\n"
+        f"Snapshot: {json.dumps(snap)}\nTasks: {json.dumps(tasks)}\n"
+        f"JSON output keys: completed_task_ids (list[str]), progress_updates (list[{{task_id, note}}]), "
+        f"new_tasks (list[{{title, notes}}]), next_plan_md (str), spoken_summary (str)."
+    )
+    resp = client.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
+    )
+    return json.loads(resp.text or "{}")
+
+
+def _apply_reconciliation(dec: dict, tasks: list[dict], target: str) -> tuple[list[str], list[str], list[str], list[str], str]:
+    """Apply completed/updated/new tasks to Google Tasks and NEXT_PLAN.md."""
+    svc, lid = get_service_and_list_id()
+    t_map = {t["id"]: t for t in tasks}
+    done, upd, added = [], [], []
+    for tid in dec.get("completed_task_ids", []):
+        if tid in t_map:
+            svc.tasks().patch(tasklist=lid, task=tid, body={"status": "completed"}).execute()
+            done.append(t_map[tid]["title"])
+    stamp = datetime.datetime.now().strftime("%H:%M")
+    for u in dec.get("progress_updates", []):
+        tid = u.get("task_id")
+        if tid in t_map and tid not in dec.get("completed_task_ids", []):
+            merged = f"{t_map[tid]['notes']}\n[{stamp}] {u.get('note', '')}".strip()
+            svc.tasks().patch(tasklist=lid, task=tid, body={"notes": merged}).execute()
+            upd.append(t_map[tid]["title"])
+    for n in dec.get("new_tasks", [])[:3]:
+        if n.get("title"):
+            add_task(n["title"], n.get("notes", ""))
+            added.append(n["title"])
+    next_md = dec.get("next_plan_md", "").strip()
+    if next_md and os.path.isdir(target):
+        with open(os.path.join(target, "NEXT_PLAN.md"), "w", encoding="utf-8") as fp:
+            fp.write(next_md + "\n")
+    rem = [t["title"] for t in tasks if t["id"] not in dec.get("completed_task_ids", [])] + added
+    return done, upd, added, rem, next_md
+
+
+def sync_coding_progress(agent_note: str = "", repo_path: str = "") -> str:
+    """Reconcile Git & Agent activity against Google Tasks using Gemini 3.8 Flash JSON."""
+    target = repo_path.strip() or os.getenv("DEFAULT_REPO_PATH", os.getcwd())
+    snap, tasks = get_repo_snapshot(target), get_open_tasks_raw()
+    dec = _ask_gemini_reconcile(snap, tasks, agent_note)
+    done, upd, added, rem, next_md = _apply_reconciliation(dec, tasks, target)
+    send_summary(done, upd, added, rem, next_md[:200])
+    return dec.get("spoken_summary", "Workspace synced with agenda.")
