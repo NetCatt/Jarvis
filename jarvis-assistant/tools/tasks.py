@@ -2,15 +2,27 @@ import datetime
 import difflib
 import json
 import os
+from dotenv import load_dotenv
 from tools.notify import send_summary
+
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(env_path)
+load_dotenv()
 
 _TASKS_SVC, _LIST_ID = None, None
 SCOPES = ["https://www.googleapis.com/auth/tasks"]
 
 
+def _res_path(fname: str) -> str:
+    if os.path.isabs(fname):
+        return fname
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), fname)
+    return p if os.path.exists(p) else os.path.abspath(fname)
+
+
 def _has_oauth() -> bool:
-    token = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
-    creds_f = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    token = _res_path(os.getenv("GOOGLE_TOKEN_FILE", "token.json"))
+    creds_f = _res_path(os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json"))
     return os.path.exists(token) or os.path.exists(creds_f)
 
 
@@ -43,7 +55,8 @@ def get_service_and_list_id():
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
 
-        token, creds_f = os.getenv("GOOGLE_TOKEN_FILE", "token.json"), os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+        token = _res_path(os.getenv("GOOGLE_TOKEN_FILE", "token.json"))
+        creds_f = _res_path(os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json"))
         creds = Credentials.from_authorized_user_file(token, SCOPES) if os.path.exists(token) else None
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:

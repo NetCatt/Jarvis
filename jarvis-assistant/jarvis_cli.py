@@ -28,7 +28,7 @@ def main() -> None:
         reply = route_command(args.ask)
     else:
         reply = sync_coding_progress(repo_path=args.repo)
-    print(f"[Jarvis]: {reply}")
+    print(f"[Mike]: {reply}")
     if not args.silent:
         speak(reply)
 

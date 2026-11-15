@@ -4,6 +4,7 @@ credentials.json
 token.json
 local_tasks.json
 *.voice
+*.mp3
 .venv/
 __pycache__/
 *.pyc

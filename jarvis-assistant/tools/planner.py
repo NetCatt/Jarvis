@@ -3,6 +3,8 @@ import subprocess
 from dotenv import load_dotenv
 from google import genai
 
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(env_path)
 load_dotenv()
 
 

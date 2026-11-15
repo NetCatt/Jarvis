@@ -12,7 +12,7 @@ def send_summary(
 ) -> bool:
     """Zero-dependency webhook dispatcher for Discord/Slack/Telegram."""
     url = os.getenv("WEBHOOK_URL", "").strip()
-    if not url:
+    if not url or "your_webhook_id" in url or "example" in url:
         return False
     lines = ["🚀 **Jarvis Project Lead Sync**"]
     if completed:
