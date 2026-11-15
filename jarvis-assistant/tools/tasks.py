@@ -1,10 +1,37 @@
 import datetime
 import difflib
+import json
 import os
 from tools.notify import send_summary
 
 _TASKS_SVC, _LIST_ID = None, None
 SCOPES = ["https://www.googleapis.com/auth/tasks"]
+
+
+def _has_oauth() -> bool:
+    token = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
+    creds_f = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    return os.path.exists(token) or os.path.exists(creds_f)
+
+
+def _get_local_file() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "local_tasks.json"))
+
+
+def _read_local_tasks() -> list[dict]:
+    p = _get_local_file()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _write_local_tasks(tasks: list[dict]) -> None:
+    with open(_get_local_file(), "w", encoding="utf-8") as f:
+        json.dump(tasks, f, indent=2)
 
 
 def get_service_and_list_id():
@@ -36,7 +63,9 @@ def get_service_and_list_id():
 
 
 def get_open_tasks_raw() -> list[dict]:
-    """Fetch raw incomplete tasks."""
+    """Fetch raw incomplete tasks from Google Tasks or local fallback."""
+    if not _has_oauth():
+        return [t for t in _read_local_tasks() if t.get("status") != "completed"]
     svc, lid = get_service_and_list_id()
     items = svc.tasks().list(tasklist=lid, showCompleted=False, maxResults=50).execute().get("items", [])
     return [{"id": t["id"], "title": t.get("title", "").strip(), "notes": t.get("notes", "").strip()} for t in items if t.get("title", "").strip()]
@@ -45,11 +74,17 @@ def get_open_tasks_raw() -> list[dict]:
 def list_agenda() -> str:
     """Voice/CLI output for open tasks."""
     tasks = get_open_tasks_raw()
-    return f"{len(tasks)} open tasks: {', '.join(t['title'] for t in tasks[:4])}." if tasks else "Daily Agenda is clear."
+    tag = " (Local)" if not _has_oauth() else ""
+    return f"{len(tasks)} open tasks{tag}: {', '.join(t['title'] for t in tasks[:4])}." if tasks else f"Daily Agenda{tag} is clear."
 
 
 def add_task(title: str, notes: str = "") -> str:
-    """Insert new task."""
+    """Insert new task locally or to Google Tasks."""
+    if not _has_oauth():
+        tasks = _read_local_tasks()
+        tasks.append({"id": f"task_{len(tasks)+1}", "title": title.strip(), "notes": notes.strip(), "status": "needsAction"})
+        _write_local_tasks(tasks)
+        return f"Added '{title}' to Daily Agenda (Local)."
     svc, lid = get_service_and_list_id()
     svc.tasks().insert(tasklist=lid, body={"title": title.strip(), "notes": notes.strip()}).execute()
     return f"Added '{title}' to Daily Agenda."
@@ -64,25 +99,39 @@ def _match(query: str, tasks: list[dict]) -> tuple[float, dict | None]:
 
 def update_task_progress(task_query: str, progress_note: str) -> str:
     """Append timestamped progress note to task."""
-    svc, lid = get_service_and_list_id()
     tasks = get_open_tasks_raw()
     score, matched = _match(task_query, tasks)
     if not matched or score < 0.45:
         return f"No open task matching '{task_query}'."
     stamp = datetime.datetime.now().strftime("%H:%M")
     notes = f"{matched['notes']}\n[{stamp}] {progress_note}".strip()
+    if not _has_oauth():
+        all_t = _read_local_tasks()
+        for t in all_t:
+            if t["id"] == matched["id"]:
+                t["notes"] = notes
+        _write_local_tasks(all_t)
+        return f"Updated progress on '{matched['title']}'."
+    svc, lid = get_service_and_list_id()
     svc.tasks().patch(tasklist=lid, task=matched["id"], body={"notes": notes}).execute()
     return f"Updated progress on '{matched['title']}'."
 
 
 def complete_task(task_query: str) -> str:
     """Complete matching task and send standup report."""
-    svc, lid = get_service_and_list_id()
     tasks = get_open_tasks_raw()
     score, matched = _match(task_query, tasks)
     if not matched or score < 0.50:
         return f"No task matching '{task_query}' found."
-    svc.tasks().patch(tasklist=lid, task=matched["id"], body={"status": "completed"}).execute()
+    if not _has_oauth():
+        all_t = _read_local_tasks()
+        for t in all_t:
+            if t["id"] == matched["id"]:
+                t["status"] = "completed"
+        _write_local_tasks(all_t)
+    else:
+        svc, lid = get_service_and_list_id()
+        svc.tasks().patch(tasklist=lid, task=matched["id"], body={"status": "completed"}).execute()
     rem = [t["title"] for t in tasks if t["id"] != matched["id"]]
     send_summary(completed=[matched["title"]], remaining=rem)
     return f"Completed '{matched['title']}'. {len(rem)} remaining."

@@ -1,4 +1,5 @@
 import argparse
+import os
 from dotenv import load_dotenv
 
 
@@ -13,6 +14,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(env_path)
     load_dotenv()
     from brain import route_command
     from main import speak

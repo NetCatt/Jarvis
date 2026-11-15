@@ -6,7 +6,14 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from tools.notify import send_summary
-from tools.tasks import add_task, get_open_tasks_raw, get_service_and_list_id
+from tools.tasks import (
+    _has_oauth,
+    _read_local_tasks,
+    _write_local_tasks,
+    add_task,
+    get_open_tasks_raw,
+    get_service_and_list_id,
+)
 
 load_dotenv()
 
@@ -49,21 +56,39 @@ def _ask_gemini_reconcile(snap: dict, tasks: list[dict], agent_note: str) -> dic
 
 
 def _apply_reconciliation(dec: dict, tasks: list[dict], target: str) -> tuple[list[str], list[str], list[str], list[str], str]:
-    """Apply completed/updated/new tasks to Google Tasks and NEXT_PLAN.md."""
-    svc, lid = get_service_and_list_id()
+    """Apply completed/updated/new tasks to Google Tasks or local cache and NEXT_PLAN.md."""
     t_map = {t["id"]: t for t in tasks}
     done, upd, added = [], [], []
+    has_oa = _has_oauth()
+    svc, lid = (get_service_and_list_id() if has_oa else (None, None))
+    all_t = ([] if has_oa else _read_local_tasks())
+
     for tid in dec.get("completed_task_ids", []):
         if tid in t_map:
-            svc.tasks().patch(tasklist=lid, task=tid, body={"status": "completed"}).execute()
+            if has_oa:
+                svc.tasks().patch(tasklist=lid, task=tid, body={"status": "completed"}).execute()
+            else:
+                for t in all_t:
+                    if t["id"] == tid:
+                        t["status"] = "completed"
             done.append(t_map[tid]["title"])
+
     stamp = datetime.datetime.now().strftime("%H:%M")
     for u in dec.get("progress_updates", []):
         tid = u.get("task_id")
         if tid in t_map and tid not in dec.get("completed_task_ids", []):
             merged = f"{t_map[tid]['notes']}\n[{stamp}] {u.get('note', '')}".strip()
-            svc.tasks().patch(tasklist=lid, task=tid, body={"notes": merged}).execute()
+            if has_oa:
+                svc.tasks().patch(tasklist=lid, task=tid, body={"notes": merged}).execute()
+            else:
+                for t in all_t:
+                    if t["id"] == tid:
+                        t["notes"] = merged
             upd.append(t_map[tid]["title"])
+
+    if not has_oa:
+        _write_local_tasks(all_t)
+
     for n in dec.get("new_tasks", [])[:3]:
         if n.get("title"):
             add_task(n["title"], n.get("notes", ""))

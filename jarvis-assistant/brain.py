@@ -4,6 +4,8 @@ from google import genai
 from google.genai import types
 from tools import TOOL_FUNCTIONS, TOOL_MAP
 
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(env_path)
 load_dotenv()
 _CLIENT = None
 PROMPT = (
