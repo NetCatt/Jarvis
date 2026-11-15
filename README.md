@@ -28,7 +28,7 @@ Trigger (CLI / Git Hook / Voice)
      - Append timestamped progress notes to in-progress tasks
      - Write NEXT_PLAN.md in target repo root
      - Dispatch webhook standup report (Discord / Slack / Telegram)
-  -> Audio Output (Fish Audio clone / Edge-TTS / Windows SAPI)
+  -> Audio Output (Fish Audio Ross clone / Windows SAPI)
 ```
 
 ## Directory Structure
@@ -91,10 +91,10 @@ ASSISTANT_NICKNAME=Mike
 USER_NAME=Fas
 
 # Speech & Audio
-TTS_ENGINE=fish_audio          # Options: fish_audio, edge_tts
-TTS_VOICE=en-GB-RyanNeural     # Edge TTS voice identifier
-FISH_AUDIO_KEY=your_key        # Optional: Fish Audio API key for custom clone
-FISH_AUDIO_MODEL_ID=model_id   # Optional: Fish Audio model reference ID
+TTS_ENGINE=fish_audio          # Strictly custom cloned voice: Ross
+TTS_VOICE=ross
+FISH_AUDIO_KEY=your_key        # Fish Audio API key for Ross clone
+FISH_AUDIO_MODEL_ID=model_id   # Fish Audio model reference ID (Ross)
 
 # Google Tasks
 GOOGLE_TASKS_LIST_NAME=Daily Agenda

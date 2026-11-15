@@ -32,25 +32,19 @@ def _speak_fish(text: str, tmp_mp3: str) -> bool:
 
 
 def speak(text: str) -> None:
-    """TTS via Fish Audio clone, with Edge-TTS and native Windows SAPI fallback."""
+    """TTS strictly via custom cloned Mike Ross voice (Fish Audio) with native SAPI fallback."""
     if not text.strip():
         return
     tmp_mp3 = os.path.abspath("temp_reply.mp3")
     try:
-        if os.getenv("TTS_ENGINE", "").lower() == "fish_audio" and _speak_fish(text, tmp_mp3):
+        if _speak_fish(text, tmp_mp3):
             return
     except Exception:
         pass
-    voice = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
-    try:
-        import edge_tts
-        asyncio.run(edge_tts.Communicate(text, voice).save(tmp_mp3))
-        _speak_mci(tmp_mp3)
-    except Exception:
-        import subprocess
-        clean = text.replace("'", " ").replace('"', " ")
-        cmd = f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{clean}')"
-        subprocess.run(["powershell", "-Command", cmd], capture_output=True)
+    import subprocess
+    clean = text.replace("'", " ").replace('"', " ")
+    cmd = f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{clean}')"
+    subprocess.run(["powershell", "-Command", cmd], capture_output=True)
 
 
 def _capture_audio_sd(duration: float = 4.0, rate: int = 16000) -> bytes:
