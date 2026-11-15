@@ -15,13 +15,20 @@ The system operates as a single-threaded linear pipeline without background poll
 
 ```
 Trigger (CLI / Git Hook / Voice)
-  -> Input Verification
-  -> Workspace Context Collection (Git status, diff, commits)
-  -> Gemini 3.8 Flash Reconciliation
-  -> Google Tasks Mutation & NEXT_PLAN.md Generation
+  -> Voice capture: webrtcvad-gated recording -> offline English-only STT (vosk)
+  -> Input/Speaker Verification
+  -> Memory assembly: working state + durable facts + episodic recall (SQLite, memory/)
+  -> Gemini Flash Conversation/Routing (brain.converse) -> deterministic tool, or
+     dispatch_coding_agent (Claude Code CLI, headless) for real engineering tasks
+  -> Memory persistence (turn + extracted facts/state)
+  -> Google Tasks Mutation & NEXT_PLAN.md Generation (dev_sync / planner)
   -> Webhook Standup Notification
   -> Text-to-Speech Output
 ```
+
+Mike holds real stateful, multi-turn conversations (not one-shot commands), backed by a three-tier memory system (`memory/`): working state (always loaded), durable facts with confidence/decay (also where personality/preference traits live), and embedding-based episodic recall (`model2vec`, NumPy-only) for the long tail. Deterministic one-shot commands (tasks, apps, media) bypass memory entirely for latency.
+
+Voice capture uses `webrtcvad` to start/stop on actual speech instead of a fixed-duration clip, transcribed offline and English-only via `vosk` — no cloud STT quota/reliability dependency, and structurally unable to mis-transcribe into another language.
 
 ## Installation
 
@@ -45,6 +52,13 @@ cp .env.example .env
 python auth_setup.py
 ```
 
+4. Download the offline English STT model (one-time, ~41MB, not committed to git):
+```bash
+curl -L -o models/vosk-model-small-en-us-0.15.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip models/vosk-model-small-en-us-0.15.zip -d models/
+rm models/vosk-model-small-en-us-0.15.zip
+```
+
 ## Configuration
 
 Set configuration values in `.env`:
@@ -58,6 +72,11 @@ Set configuration values in `.env`:
 | GOOGLE_TASKS_LIST_NAME | Google Tasks list title | Daily Agenda |
 | TTS_VOICE | Edge TTS voice identifier | en-US-ChristopherNeural |
 | WEBHOOK_URL | Optional Discord/Slack webhook | None |
+| VOSK_MODEL_PATH | Offline English STT model directory | models/vosk-model-small-en-us-0.15 |
+| MEMORY_DB_PATH | SQLite memory file (working state/facts/episodic) | memory.db |
+| EMBEDDING_MODEL | Static embedding model for episodic recall | minishlab/potion-base-8M |
+| AGENT_DISPATCH_MAX_BUDGET_USD | Cost cap per Claude Code CLI dispatch | 1.00 |
+| CLAUDE_CLI_PATH | Override auto-discovered claude.exe path | auto-detected |
 
 ## Usage
 
@@ -72,6 +91,16 @@ Add a task manually:
 ```bash
 python jarvis_cli.py --ask "add task implement password reset to my agenda"
 ```
+
+Schedule a task for a future date, or create/use separate task lists beyond the default Daily Agenda:
+```bash
+python jarvis_cli.py --ask "remind me to renew car insurance tomorrow"
+python jarvis_cli.py --ask "create a task list called Groceries"
+python jarvis_cli.py --ask "add milk and eggs to my Groceries list"
+python jarvis_cli.py --ask "what task lists do I have"
+python jarvis_cli.py --ask "what's on my agenda today"
+```
+Mike resolves relative dates against the real current date and keeps lists separate — a task added to "Groceries" won't show up when you ask about the Daily Agenda.
 
 Sync workspace status and diffs with Google Tasks:
 ```bash
@@ -95,8 +124,28 @@ When fired, Jarvis automatically:
 
 ### Voice Loop
 
-Run the always-on voice assistant:
+Double-click `run_mike.bat` to start the always-on voice assistant — no terminal or IDE needed. (Or run `python main.py` directly.)
+
+Press `F9` to toggle between Active and Standby modes. Each run holds one continuous multi-turn conversation (session tied to the process) — Mike will reference things said earlier in the same run.
+
+### Data layout
+
+All secrets and runtime state live under `data/` (gitignored): `credentials.json`, `token.json`, `local_tasks.json`, `faisal.voice.npy`, `memory.db`. Source code stays at the repo root/`tools/`/`memory/` packages.
+
+### Dispatching real engineering work
+
+Ask Mike to build/fix/architect something and he'll route it to the Claude Code CLI instead of trying to do it himself:
 ```bash
-python main.py
+python jarvis_cli.py --ask "have the ml-engineer refactor the training pipeline in my-project for batching"
 ```
-Press `F9` to toggle between Active and Standby modes.
+This costs real API dollars (capped by `AGENT_DISPATCH_MAX_BUDGET_USD`), unlike Mike's own Gemini-based conversation. Every dispatch is logged with cost/result; inspect it with:
+```bash
+python -c "from memory.store import _connect, init_db; init_db(); [print(dict(r)) for r in _connect().execute('SELECT * FROM workflows')]"
+```
+
+### Memory debug
+
+```bash
+python jarvis_cli.py --recall "what do you know about my preferences"
+python jarvis_cli.py --reflect   # compacts older turns, bounding memory.db growth
+```

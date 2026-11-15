@@ -2,9 +2,10 @@ import os
 import numpy as np
 import sounddevice as sd
 
-PROFILE_PATH = os.path.join(os.path.dirname(__file__), os.getenv("VOICE_PROFILE_PATH", "faisal.voice"))
+PROFILE_PATH = os.path.join(os.path.dirname(__file__), os.getenv("VOICE_PROFILE_PATH", "data/faisal.voice"))
 if not PROFILE_PATH.endswith(".npy"):
     PROFILE_PATH += ".npy"
+os.makedirs(os.path.dirname(PROFILE_PATH), exist_ok=True)
 
 
 def extract_features(audio: np.ndarray) -> np.ndarray:

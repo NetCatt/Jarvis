@@ -5,7 +5,7 @@ google-auth-oauthlib==1.2.1
 python-dotenv==1.0.1
 edge-tts==6.1.19
 pyttsx3==2.98
-SpeechRecognition==3.14.1
-pveagle==1.0.3
-pvporcupine==3.0.4
 numpy==2.2.3
+vosk==0.3.45
+webrtcvad-wheels==2.0.14.post1
+model2vec==0.10.0

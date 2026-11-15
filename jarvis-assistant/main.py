@@ -1,10 +1,13 @@
-import asyncio
 import ctypes
+import datetime
+import json
 import os
+
 import numpy as np
 from dotenv import load_dotenv
 
 IS_ACTIVE = True
+_VOSK_MODEL = None
 
 
 def _speak_mci(tmp_mp3: str) -> None:
@@ -21,7 +24,7 @@ def _speak_fish(text: str, tmp_mp3: str) -> bool:
     key, mid = os.getenv("FISH_AUDIO_KEY"), os.getenv("FISH_AUDIO_MODEL_ID")
     if not key or not mid:
         return False
-    import json, urllib.request
+    import urllib.request
     payload = json.dumps({"text": text, "reference_id": mid, "format": "mp3"}).encode("utf-8")
     req = urllib.request.Request("https://api.fish.audio/v1/tts", data=payload, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "model": "s2.1-pro-free"})
     with urllib.request.urlopen(req, timeout=8.0) as resp:
@@ -39,36 +42,80 @@ def speak(text: str) -> None:
     try:
         if _speak_fish(text, tmp_mp3):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Mike:tts] Fish Audio clone failed ({exc}); falling back to Windows SAPI.")
     import subprocess
     clean = text.replace("'", " ").replace('"', " ")
     cmd = f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{clean}')"
     subprocess.run(["powershell", "-Command", cmd], capture_output=True)
 
 
-def _capture_audio_sd(duration: float = 4.0, rate: int = 16000) -> bytes:
-    """Record PCM audio using pre-installed sounddevice backend (0 PyAudio dependency)."""
+def _get_vosk_model():
+    """Lazy-loaded offline English-only STT model (Kaldi/C++ backend, no torch/onnxruntime)."""
+    global _VOSK_MODEL
+    if _VOSK_MODEL is None:
+        import vosk
+        vosk.SetLogLevel(-1)
+        default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "vosk-model-small-en-us-0.15")
+        model_path = os.getenv("VOSK_MODEL_PATH", default_path)
+        _VOSK_MODEL = vosk.Model(model_path)
+    return _VOSK_MODEL
+
+
+def _capture_audio_vad(rate: int = 16000, frame_ms: int = 20, max_duration: float = 10.0, silence_ms: int = 700) -> bytes:
+    """Record one utterance gated by WebRTC VAD: starts on detected speech, stops after trailing silence."""
     import sounddevice as sd
-    rec = sd.rec(int(duration * rate), samplerate=rate, channels=1, dtype="int16")
-    sd.wait()
-    return rec.tobytes()
+    import webrtcvad
+
+    vad = webrtcvad.Vad(int(os.getenv("VAD_MODE", "2")))
+    frame_len = int(rate * frame_ms / 1000)
+    max_frames = int(max_duration * 1000 / frame_ms)
+    silence_frames_needed = max(1, int(silence_ms / frame_ms))
+
+    frames: list[bytes] = []
+    triggered = False
+    silence_count = 0
+    with sd.InputStream(samplerate=rate, channels=1, dtype="int16", blocksize=frame_len) as stream:
+        for _ in range(max_frames):
+            data, _ = stream.read(frame_len)
+            pcm_bytes = data.tobytes()
+            if len(pcm_bytes) < frame_len * 2:
+                continue
+            is_speech = vad.is_speech(pcm_bytes, rate)
+            if is_speech:
+                frames.append(pcm_bytes)
+                triggered = True
+                silence_count = 0
+            elif triggered:
+                frames.append(pcm_bytes)
+                silence_count += 1
+                if silence_count >= silence_frames_needed:
+                    break
+    return b"".join(frames)
 
 
-def _process_audio(r) -> None:
+def _transcribe(pcm_bytes: bytes, rate: int = 16000) -> str:
+    """English-only offline transcription (Vosk) — structurally cannot output another language."""
+    import vosk
+    model = _get_vosk_model()
+    rec = vosk.KaldiRecognizer(model, rate)
+    rec.AcceptWaveform(pcm_bytes)
+    result = json.loads(rec.FinalResult())
+    return result.get("text", "").strip()
+
+
+def _process_audio(session_id: str) -> None:
     global IS_ACTIVE
-    from brain import route_command
+    from brain import converse
     from voice_gate import verify_speaker
-    import speech_recognition as sr
     try:
-        pcm = _capture_audio_sd(duration=4.0, rate=16000)
-        audio_arr = np.frombuffer(pcm, dtype=np.int16)
-        if np.abs(audio_arr).mean() < 300:
+        pcm = _capture_audio_vad()
+        if not pcm:
             return
+        audio_arr = np.frombuffer(pcm, dtype=np.int16)
         if not verify_speaker(audio_arr):
             return
-        audio_data = sr.AudioData(pcm, 16000, 2)
-        cmd = r.recognize_google(audio_data).strip()
+        cmd = _transcribe(pcm)
         if not cmd:
             return
         print(f"[Fas]: {cmd}")
@@ -76,19 +123,18 @@ def _process_audio(r) -> None:
             IS_ACTIVE = False
             speak("Entering standby mode, Fas.")
             return
-        reply = route_command(cmd)
+        reply = converse(session_id, cmd)
         print(f"[Mike]: {reply}")
         speak(reply)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Mike:error] {exc}")
 
 
 def listen_and_execute() -> None:
-    """Always-On / Standby voice loop with sounddevice + Google STT."""
+    """Always-On / Standby voice loop: VAD-gated capture, offline English STT, stateful conversation."""
     global IS_ACTIVE
-    import speech_recognition as sr
     from voice_gate import check_hotkey_toggle
-    r = sr.Recognizer()
+    session_id = f"voice-{os.getpid()}-{datetime.datetime.now():%Y%m%d%H%M%S}"
     user = os.getenv("USER_NAME", "Fas")
     name = os.getenv("ASSISTANT_NAME", "Mike Ross")
     greeting = f"Hello {user}. {name} is online and ready."
@@ -100,7 +146,7 @@ def listen_and_execute() -> None:
             IS_ACTIVE = not IS_ACTIVE
             speak(f"Active mode, {user}" if IS_ACTIVE else f"Standby mode, {user}")
         if IS_ACTIVE:
-            _process_audio(r)
+            _process_audio(session_id)
 
 
 if __name__ == "__main__":

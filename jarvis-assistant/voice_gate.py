@@ -11,7 +11,7 @@ def check_hotkey_toggle(hex_key: int = 0x78) -> bool:
 
 
 def _get_profile_path() -> str:
-    p = os.getenv("VOICE_PROFILE_PATH", "faisal.voice")
+    p = os.getenv("VOICE_PROFILE_PATH", "data/faisal.voice")
     if not os.path.isabs(p):
         p = os.path.join(os.path.dirname(os.path.abspath(__file__)), p)
     if not p.endswith(".npy") and not os.path.exists(p) and os.path.exists(p + ".npy"):
@@ -38,4 +38,5 @@ def verify_speaker(audio_pcm: np.ndarray) -> bool:
             return score >= threshold
         except Exception:
             pass
+    # No enrolled profile: this is just an energy/noise gate, not real speaker verification.
     return float(np.std(audio_pcm)) > 250.0

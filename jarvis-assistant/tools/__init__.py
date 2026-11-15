@@ -1,8 +1,9 @@
 from tools.apps import open_app
 from tools.dev_sync import sync_coding_progress
+from tools.dispatch import dispatch_coding_agent
 from tools.media import open_browser, play_music, play_spotify, play_youtube, search_google
 from tools.planner import write_agent_plan
-from tools.tasks import add_task, complete_task, list_agenda, update_task_progress
+from tools.tasks import add_task, complete_task, create_task_list, list_agenda, list_task_lists, update_task_progress
 
 TOOL_FUNCTIONS = [
     sync_coding_progress,
@@ -10,7 +11,10 @@ TOOL_FUNCTIONS = [
     add_task,
     update_task_progress,
     complete_task,
+    create_task_list,
+    list_task_lists,
     write_agent_plan,
+    dispatch_coding_agent,
     open_app,
     open_browser,
     search_google,

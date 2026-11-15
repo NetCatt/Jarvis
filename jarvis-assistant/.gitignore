@@ -1,11 +1,6 @@
 .env
 *.env
-credentials.json
-token.json
-local_tasks.json
-*.voice
-*.voice.npy
-*.npy
+data/
 *.mp3
 .venv/
 __pycache__/
@@ -13,3 +8,4 @@ __pycache__/
 temp_reply.mp3
 NEXT_PLAN.md
 *.log
+models/
