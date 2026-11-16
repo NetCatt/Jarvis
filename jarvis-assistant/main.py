@@ -1,5 +1,4 @@
 import ctypes
-import datetime
 import json
 import os
 import time
@@ -231,7 +230,12 @@ def listen_and_execute() -> None:
     """Always-On / Standby voice loop: VAD-gated capture, offline English STT, stateful conversation."""
     global IS_ACTIVE
     from voice_gate import check_hotkey_toggle
-    session_id = f"voice-{os.getpid()}-{datetime.datetime.now():%Y%m%d%H%M%S}"
+    # Stable across restarts, not randomized per launch (was `voice-{pid}-{timestamp}`) — a fresh
+    # session id on every run meant a crash or manual restart silently wiped all short-term memory
+    # and working state, which looked exactly like "forgets everything after one sentence." Memory
+    # itself works correctly across turns (verified directly) when the session id stays constant;
+    # it just wasn't staying constant across process restarts before.
+    session_id = os.getenv("VOICE_SESSION_ID", "voice")
     user = os.getenv("USER_NAME", "Fas")
     name = os.getenv("ASSISTANT_NAME", "Mike Ross")
     greeting = f"Hello {user}. {name} is online and ready."
