@@ -52,12 +52,13 @@ cp .env.example .env
 python auth_setup.py
 ```
 
-4. Download the offline English STT model (one-time, ~41MB, not committed to git):
+4. Download the offline English STT model (one-time, ~130MB, not committed to git):
 ```bash
-curl -L -o models/vosk-model-small-en-us-0.15.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-unzip models/vosk-model-small-en-us-0.15.zip -d models/
-rm models/vosk-model-small-en-us-0.15.zip
+curl -L -o models/vosk-model-en-us-0.22-lgraph.zip https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip
+unzip models/vosk-model-en-us-0.22-lgraph.zip -d models/
+rm models/vosk-model-en-us-0.22-lgraph.zip
 ```
+For a lower-RAM alternative (~236MB RSS vs ~460MB), use `vosk-model-small-en-us-0.15` (~41MB download) instead and point `VOSK_MODEL_PATH` at it.
 
 ## Configuration
 
@@ -66,13 +67,13 @@ Set configuration values in `.env`:
 | Key | Description | Default |
 | --- | --- | --- |
 | GEMINI_API_KEY | Google AI Studio API Key | Required |
-| GEMINI_MODEL | Primary reconciliation model | gemini-3.8-flash |
-| GEMINI_FALLBACK_MODEL | Fallback model on rate limits | gemini-3.5-flash-lite |
+| GEMINI_MODEL | Primary model | gemini-3.5-flash-lite (generous free quota; full `flash` caps at 20 req/day free) |
+| GEMINI_FALLBACK_MODEL | Fallback on rate limits/errors | gemini-3.5-flash |
 | DEFAULT_REPO_PATH | Target codebase path to inspect | Local directory |
 | GOOGLE_TASKS_LIST_NAME | Google Tasks list title | Daily Agenda |
 | TTS_VOICE | Edge TTS voice identifier | en-US-ChristopherNeural |
 | WEBHOOK_URL | Optional Discord/Slack webhook | None |
-| VOSK_MODEL_PATH | Offline English STT model directory | models/vosk-model-small-en-us-0.15 |
+| VOSK_MODEL_PATH | Offline English STT model directory | models/vosk-model-en-us-0.22-lgraph |
 | MEMORY_DB_PATH | SQLite memory file (working state/facts/episodic) | memory.db |
 | EMBEDDING_MODEL | Static embedding model for episodic recall | minishlab/potion-base-8M |
 | AGENT_DISPATCH_MAX_BUDGET_USD | Cost cap per Claude Code CLI dispatch | 1.00 |

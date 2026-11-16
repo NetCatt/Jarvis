@@ -7,7 +7,7 @@ Mike holds real stateful, multi-turn conversations (not one-shot commands), back
 ## Hardware Resource Budget
 
 - Deterministic one-shot commands (tasks, apps, media) keep a near-zero RAM fast path — no memory/embedding overhead.
-- The full conversational path with offline STT (`vosk`) and episodic embeddings (`model2vec`) both loaded runs ~236 MB RSS. This is a deliberate trade-off versus the old cloud-STT approach (near-zero RAM, but unreliable and network-dependent) — on an 8GB machine this is negligible in absolute terms.
+- The full conversational path with offline STT (`vosk-model-en-us-0.22-lgraph`) and episodic embeddings (`model2vec`) both loaded runs ~460 MB RSS (measured). This is a deliberate trade-off versus the old cloud-STT approach (near-zero RAM, but unreliable and network-dependent) — on an 8GB machine this is negligible in absolute terms. A smaller Vosk model (~236 MB total) is available if RAM ever becomes a real constraint; the larger one was chosen for meaningfully better transcription accuracy.
 - Zero Background Watchers: no `watchdog` daemons. Git repositories are inspected on-demand via bounded subprocesses (`timeout=3.0s`).
 - Compute Offloading: Mike's own reasoning/routing runs via Google AI Studio Free Tier (Gemini Flash, with fallback). Claude Code CLI dispatch is only invoked for real engineering tasks and costs real API dollars, capped per call.
 - Banned/avoided: `torch`, `onnxruntime` (for the offline STT path), `pygame`, `watchdog` daemons.
@@ -137,14 +137,16 @@ python auth_setup.py
 ```
 *Note: If `data/credentials.json` is not present, the system automatically falls back to `data/local_tasks.json`, remaining 100% operational offline.*
 
-### 5. Offline Voice Model (one-time download)
+### 5. Offline Voice Model (one-time download, ~130MB)
 
 ```bash
 cd jarvis-assistant
-curl -L -o models/vosk-model-small-en-us-0.15.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-unzip models/vosk-model-small-en-us-0.15.zip -d models/
-rm models/vosk-model-small-en-us-0.15.zip
+curl -L -o models/vosk-model-en-us-0.22-lgraph.zip https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip
+unzip models/vosk-model-en-us-0.22-lgraph.zip -d models/
+rm models/vosk-model-en-us-0.22-lgraph.zip
 ```
+
+If RAM is tight on your machine, `vosk-model-small-en-us-0.15` (~41MB download, ~236MB RSS vs. ~460MB for the lgraph model above) is a smaller/less accurate alternative — download it the same way and point `VOSK_MODEL_PATH` at it instead.
 
 ### 6. Speaker Recognition Setup (Optional)
 

@@ -13,10 +13,13 @@ def _get_client():
 
 
 def _models() -> list[str]:
+    # No third hardcoded fallback here on purpose: "gemini-2.5-flash" used to be one and is now a
+    # confirmed 404 (deprecated for new users) — a dead fallback just adds a failing attempt before
+    # the real error surfaces. If both configured models are exhausted/unavailable, that should
+    # fail loudly rather than silently eat latency probing a model that no longer exists.
     return [
-        os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
-        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite"),
-        "gemini-2.5-flash",
+        os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash"),
     ]
 
 

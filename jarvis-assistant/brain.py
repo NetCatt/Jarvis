@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import threading
 
 from dotenv import load_dotenv
 from google import genai
@@ -17,10 +18,13 @@ load_dotenv()
 _CLIENT = None
 DEFAULT_SESSION = "default"
 _LAST_DECAY_DATE = None
-# Tools that may need a follow-up decision (investigate/act, then report back in Mike's own words)
-# instead of returning their raw string immediately. Keep this small — every entry costs an extra
-# Gemini round trip, which is exactly the latency the fast path below exists to avoid.
-_CHAINABLE_TOOLS = {"dispatch_coding_agent"}
+# Tools whose result is INFORMATION to discuss (answer a question naturally, in the terms Fas
+# actually asked it — "yeah, 2 pending" for a yes/no question, not a verbatim data dump) get a
+# second round trip to synthesize a real reply instead of reciting the tool's raw return string.
+# Pure ACTION-confirmation tools (add_task, play_music, open_app...) stay terminal/fast — their
+# raw string is already a fine conversational confirmation, and that second round trip is real
+# added latency, so this set stays scoped to tools that actually need it.
+_CHAINABLE_TOOLS = {"dispatch_coding_agent", "list_agenda", "list_task_lists", "sync_coding_progress"}
 
 BASE_PROMPT = (
     "You are Mike Ross (nickname Mike), an AI Technical Project Lead and Windows 10 orchestrator for Fas. "
@@ -37,7 +41,10 @@ BASE_PROMPT = (
     "create it via create_task_list if it doesn't exist yet. Use list_task_lists if Fas asks what lists exist. "
     "If no list is named, everything defaults to the main Daily Agenda — don't ask which list unless genuinely ambiguous. "
     "When Fas asks for today's agenda or a briefing, call list_agenda(when='today') for what's due today, or "
-    "list_agenda(when='all') for everything open, and summarize it naturally — don't just read tool output verbatim. "
+    "list_agenda(when='all') for everything open. Then answer in the terms Fas actually asked — if he asked a "
+    "yes/no question ('is there anything pending?'), answer yes/no first with a brief count, don't recite the "
+    "tool's raw string verbatim; if he asked what's on it, list it naturally. The tool gives you the real data, "
+    "your job is to say it the way a person would answer that specific question. "
     "When Fas says 'remember that...' about a personal fact, preference, or opinion (not a to-do item), do NOT "
     "call a tool — just acknowledge it conversationally in plain text; it is captured into memory automatically. "
     "Plan next agent steps via write_agent_plan. "
@@ -71,7 +78,7 @@ def _get_client():
 
 
 def _models() -> list[str]:
-    return [os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")]
+    return [os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"), os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")]
 
 
 def _build_system_prompt(session_id: str, user_text: str) -> str:
@@ -105,7 +112,10 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
         "From this exchange, extract durable state. Respond ONLY as JSON with keys: "
         '"current_project" (string or null, only if clearly stated/changed), '
         '"last_topic" (short string or null), '
-        '"new_fact" (object with subject, predicate, value — only if a clear lasting preference/fact about Fas was stated, else null).\n'
+        '"new_fact" (object with subject, predicate, value — ONLY if Fas explicitly stated a lasting '
+        "personal preference, opinion, or fact about himself (e.g. likes dark mode, works on project X). "
+        "Do NOT extract that Fas speaks/prefers English, or anything about the language of the conversation "
+        "itself — that is a given, not a personal fact worth remembering. If nothing qualifies, use null.\n"
         f"User: {user_text}\nMike: {reply}"
     )
     try:
@@ -171,22 +181,32 @@ def converse(session_id: str, user_text: str) -> str:
             # is what keeps those fast; only chain for the ones that need real multi-step reasoning.
             if call.name in _CHAINABLE_TOOLS:
                 chained = True
-                contents.append(types.Content(role="model", parts=[types.Part.from_function_call(name=call.name, args=call.args or {})]))
+                # Reuse the model's own returned content (not a hand-built Part) — Gemini's
+                # thinking models attach a required thought_signature to function_call parts that
+                # gets silently dropped if you reconstruct the part yourself, breaking the next call.
+                contents.append(resp.candidates[0].content)
                 contents.append(types.Content(role="user", parts=[types.Part.from_function_response(name=call.name, response={"result": result})]))
                 continue
             break
         reply = (resp.text or "Done.").strip().replace("*", "")
         break
 
-    # A single, immediate tool call with no further reasoning is the old fast path (play music, add
-    # a task, etc.) — skip memory for it. Anything chained across multiple steps, or ended in
-    # synthesized text, reflects real conversation/problem-solving and is worth remembering.
+    # EVERY turn goes into short-term memory (recent_turns), fast path or not — otherwise a follow-up
+    # like "what are you going to do about it" right after a fast-path agenda check has nothing to
+    # resolve "it" against, because that turn was never recorded at all. This was a real bug, not a
+    # hypothetical: the embedding/fact-extraction work is what's actually expensive, not the raw
+    # SQLite insert, so only THAT gets skipped on the fast path.
     is_simple_fast_path = steps_taken >= 1 and not chained
-    if not is_simple_fast_path:
+    if is_simple_fast_path:
+        append_turn(session_id, "user", user_text, None)
+        append_turn(session_id, "mike", reply, None)
+    else:
         append_turn(session_id, "user", user_text, embed(user_text))
         append_turn(session_id, "mike", reply, embed(reply))
-        _extract_state_update(session_id, user_text, reply)
-        _maybe_run_memory_upkeep(session_id)
+        # Fact/state extraction is a second Gemini call — run it in the background so it doesn't
+        # add to the latency Fas is actually waiting on for the spoken reply.
+        threading.Thread(target=_extract_state_update, args=(session_id, user_text, reply), daemon=True).start()
+    _maybe_run_memory_upkeep(session_id)
     return reply
 
 
