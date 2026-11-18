@@ -6,6 +6,8 @@ local_tasks.json
 *.voice
 *.voice.npy
 *.npy
+*.db
+data/
 *.mp3
 .venv/
 __pycache__/

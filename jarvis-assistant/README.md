@@ -74,6 +74,8 @@ Set configuration values in `.env`:
 | TTS_VOICE | Edge TTS voice identifier | en-US-ChristopherNeural |
 | WEBHOOK_URL | Optional Discord/Slack webhook | None |
 | VOSK_MODEL_PATH | Offline English STT model directory | models/vosk-model-en-us-0.22-lgraph |
+| STOP_PHRASE | Say this at the end of a sentence to end your turn immediately (no silence wait) | over |
+| VOICE_MATCH_THRESHOLD | Spectral-similarity score required to accept the speaker | 0.40 |
 | MEMORY_DB_PATH | SQLite memory file (working state/facts/episodic) | memory.db |
 | EMBEDDING_MODEL | Static embedding model for episodic recall | minishlab/potion-base-8M |
 | AGENT_DISPATCH_MAX_BUDGET_USD | Cost cap per Claude Code CLI dispatch | 1.00 |

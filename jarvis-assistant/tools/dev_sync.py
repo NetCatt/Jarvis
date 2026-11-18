@@ -56,7 +56,9 @@ def _ask_gemini_reconcile(snap: dict, tasks: list[dict], agent_note: str) -> dic
     )
     try:
         resp = generate(prompt, temperature=0.0, json_mode=True)
-        return json.loads(resp.text or "{}")
+        parsed = json.loads(resp.text or "{}")
+        if isinstance(parsed, dict):
+            return parsed
     except Exception:
         pass
     # Deterministic fallback when all APIs unavailable

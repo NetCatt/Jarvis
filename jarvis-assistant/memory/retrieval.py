@@ -1,36 +1,40 @@
-import numpy as np
-
-from memory.embeddings import cosine, embed
-from memory.store import candidate_turns
+import re
+from memory.store import _connect, init_db
 
 
-def recall(query: str, session_id: str | None = None, k: int = 4, max_chars: int = 600) -> list[str]:
-    """Episodic (tier-3) recall: cosine-rank recency-bounded candidates, return compact snippets.
-
-    This is the fallback long-tail layer only — working state (tier 1) and durable facts
-    (tier 2) are loaded unconditionally elsewhere and should not depend on this succeeding.
-    """
-    candidates = candidate_turns(session_id=session_id)
-    if not candidates:
+def recall(
+    query: str, session_id: str | None = None, k: int = 4, max_chars: int = 600
+) -> list[str]:
+    init_db()
+    if not query or not isinstance(query, str):
         return []
-    q_vec = embed(query)
-    scored = []
-    for row in candidates:
-        try:
-            vec = np.frombuffer(row["embedding"], dtype=np.float32)
-            score = cosine(q_vec, vec)
-        except Exception:
-            continue
-        scored.append((score, row))
-    scored.sort(key=lambda x: x[0], reverse=True)
+    tokens = re.findall(r"\w+", query)
+    if not tokens:
+        return []
+    match_query = " OR ".join(f'"{t}"' for t in tokens)
+    conn = _connect()
+    try:
+        if session_id:
+            rows = conn.execute(
+                "SELECT role, content, bm25(conversations_fts) AS rank FROM conversations_fts WHERE conversations_fts MATCH ? AND session_id = ? ORDER BY rank LIMIT ?",
+                (match_query, session_id, k * 2),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT role, content, bm25(conversations_fts) AS rank FROM conversations_fts WHERE conversations_fts MATCH ? ORDER BY rank LIMIT ?",
+                (match_query, k * 2),
+            ).fetchall()
+    except Exception:
+        return []
+
     snippets = []
     budget = max_chars
-    for score, row in scored[:k]:
-        if score < 0.3:
-            continue
-        snippet = f"[{row['role']}] {row['text']}"[:200]
+    for row in rows:
+        snippet = f"[{row['role']}] {row['content']}"[:200]
         if len(snippet) > budget:
             break
         snippets.append(snippet)
         budget -= len(snippet)
+        if len(snippets) >= k:
+            break
     return snippets

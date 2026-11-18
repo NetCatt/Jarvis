@@ -1,126 +1,136 @@
 import datetime
+import inspect
 import json
 import os
 import threading
-
+import types
+import urllib.request
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
+from lead.prompts import build_lead_prompt, detect_emotion_cue
 from memory.embeddings import embed
 from memory.retrieval import recall
-from memory.store import append_turn, compact, decay_facts, get_active_state, recent_turns, top_facts, update_active_state, upsert_fact
+from memory.store import (
+    append_turn,
+    compact,
+    decay_facts,
+    get_active_personality_directives,
+    get_active_state,
+    recent_turns,
+    top_facts,
+    update_active_state,
+    upsert_fact,
+)
 from tools import TOOL_FUNCTIONS, TOOL_MAP
+from tools.tasks import get_open_tasks_context
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 load_dotenv(env_path)
 load_dotenv()
+
 _CLIENT = None
 DEFAULT_SESSION = "default"
 _LAST_DECAY_DATE = None
-# Tools whose result is INFORMATION to discuss (answer a question naturally, in the terms Fas
-# actually asked it — "yeah, 2 pending" for a yes/no question, not a verbatim data dump) get a
-# second round trip to synthesize a real reply instead of reciting the tool's raw return string.
-# Pure ACTION-confirmation tools (add_task, play_music, open_app...) stay terminal/fast — their
-# raw string is already a fine conversational confirmation, and that second round trip is real
-# added latency, so this set stays scoped to tools that actually need it.
 _CHAINABLE_TOOLS = {"dispatch_coding_agent", "list_agenda", "list_task_lists", "sync_coding_progress"}
-
-BASE_PROMPT = (
-    "You are Mike Ross (nickname Mike), an AI Technical Project Lead and Windows 10 orchestrator for Fas. "
-    "Always address the user as Fas when speaking. "
-    "Sync repo progress via sync_coding_progress. Manage Google Tasks via add_task, update_task_progress, "
-    "complete_task, list_agenda — ONLY use these when Fas explicitly asks to track/add/complete a to-do item. "
-    "Create a task for ANYTHING Fas asks you to track or follow up on, not just daily chores — including "
-    "tasks scheduled for a future date. When Fas gives a relative date ('tomorrow', 'next Monday', 'in 3 days'), "
-    "resolve it to an exact YYYY-MM-DD using today's date given below and pass it as add_task's due_date. "
-    "Task titles and notes MUST be short, meaningful, human-readable descriptions of the actual thing to do — "
-    "never a commit hash, numeric ID, or vague placeholder. "
-    "Tasks are NOT limited to one list. If Fas names a topic/project ('add it to my Groceries list', 'make a "
-    "list for the move'), pass that as list_name to add_task/list_agenda/complete_task/update_task_progress — "
-    "create it via create_task_list if it doesn't exist yet. Use list_task_lists if Fas asks what lists exist. "
-    "If no list is named, everything defaults to the main Daily Agenda — don't ask which list unless genuinely ambiguous. "
-    "When Fas asks for today's agenda or a briefing, call list_agenda(when='today') for what's due today, or "
-    "list_agenda(when='all') for everything open. Then answer in the terms Fas actually asked — if he asked a "
-    "yes/no question ('is there anything pending?'), answer yes/no first with a brief count, don't recite the "
-    "tool's raw string verbatim; if he asked what's on it, list it naturally. The tool gives you the real data, "
-    "your job is to say it the way a person would answer that specific question. "
-    "When Fas says 'remember that...' about a personal fact, preference, or opinion (not a to-do item), do NOT "
-    "call a tool — just acknowledge it conversationally in plain text; it is captured into memory automatically. "
-    "Plan next agent steps via write_agent_plan. "
-    "When asked to play a song or music, use play_music(song, platform). If platform is not specified, leave platform empty so Mike asks whether Spotify or YouTube. "
-    "If Fas answers 'Spotify', 'YouTube', 'on Spotify', or 'on YouTube', always route to play_music(song='', platform=...) instead of open_app. "
-    "When asked to search something on Google or browser, use search_google(query). "
-    "When asked to open the browser or a website, use open_browser(url). Launch desktop apps via open_app. "
-    "When Fas asks you to build, fix, refactor, or architect actual code (not a simple local command), use "
-    "dispatch_coding_agent(task, agent, repo_path) choosing agent='ml-engineer' for data/model/training work, "
-    "agent='architect' for design/structure/planning work, or leave agent empty for general coding tasks. "
-    "RULE, no exceptions: when Fas describes a problem or asks what you're going to do about something, your "
-    "very next action MUST be a tool call, never plain text. Saying 'I'll look into it', 'let me check', or "
-    "'I'll inspect X' without an accompanying tool call in the SAME turn is a failure — Fas cannot see what you "
-    "silently intend to do, only what you actually call. Concretely: for a real engineering/technical problem, "
-    "call dispatch_coding_agent in this turn — don't promise to; if you need to check current state first, call "
-    "list_agenda or sync_coding_progress — don't describe checking it. Plain text alone is only acceptable once "
-    "a tool has already run (this turn or a prior one) and you are reporting its real result, or once you've "
-    "concluded no tool genuinely applies. "
-    "Return crisp, spoken replies (max 2 sentences, no markdown symbols). "
-    "ALWAYS reply in English, regardless of the apparent language of the input text. If the input looks garbled, "
-    "nonsensical, or like a transcription error, say you didn't catch that and ask Fas to repeat it in English — "
-    "never guess content in another language."
-)
 
 
 def _get_client():
     global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     return _CLIENT
 
 
 def _models() -> list[str]:
-    return [os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"), os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")]
+    return [
+        os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash"),
+    ]
+
+
+def _build_tool_declarations(tool_functions: list) -> list[dict]:
+    declarations = []
+    descriptions = {
+        "sync_coding_progress": "Synchronize and report coding progress from git and tasks.",
+        "list_agenda": "List open agenda tasks, blockers, and due items.",
+        "add_task": "Add a task to the agenda or named list.",
+        "update_task_progress": "Append a progress or blocker note to a task.",
+        "complete_task": "Mark a task as completed.",
+        "create_task_list": "Create a new task list.",
+        "list_task_lists": "List all task lists.",
+        "write_agent_plan": "Write implementation plan for agent steps.",
+        "dispatch_coding_agent": "Dispatch an external coding agent to implement code.",
+        "open_app": "Launch a desktop application.",
+        "open_browser": "Open a URL in the browser.",
+        "search_google": "Search Google in the browser.",
+        "play_music": "Play music or song.",
+        "play_youtube": "Play video or music on YouTube.",
+        "play_spotify": "Play track or artist on Spotify.",
+    }
+    for fn in tool_functions:
+        sig = inspect.signature(fn)
+        properties = {}
+        required = []
+        for name, param in sig.parameters.items():
+            properties[name] = {"type": "STRING"}
+            if param.default == inspect.Parameter.empty:
+                required.append(name)
+        decl = {
+            "name": fn.__name__,
+            "description": descriptions.get(fn.__name__, f"Execute {fn.__name__}"),
+            "parameters": {
+                "type": "OBJECT",
+                "properties": properties,
+            },
+        }
+        if required:
+            decl["parameters"]["required"] = required
+        declarations.append(decl)
+    return declarations
+
+
+def _call_gemini_rest(contents: list, system_instruction: str = None, tools: list = None, model: str = None) -> dict:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return {"error": "Missing GEMINI_API_KEY"}
+    active_model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={api_key}"
+    payload = {"contents": contents, "generationConfig": {"temperature": 0.2}}
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    if tools:
+        payload["tools"] = [{"functionDeclarations": _build_tool_declarations(tools)}]
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30.0) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def _build_system_prompt(session_id: str, user_text: str) -> str:
     state = get_active_state(session_id)
+    directives = get_active_personality_directives()
     facts = top_facts("Fas", limit=6)
     snippets = recall(user_text, session_id=session_id, k=4)
-
-    today = datetime.datetime.now().strftime("%A, %Y-%m-%d")
-    parts = [BASE_PROMPT, f"Today's date is {today}."]
-    if state["current_project"] or state["open_threads"] or state["last_topic"]:
-        parts.append(
-            "Current working state — project: {proj}; last topic: {topic}; open threads: {threads}.".format(
-                proj=state["current_project"] or "none",
-                topic=state["last_topic"] or "none",
-                threads=", ".join(state["open_threads"]) or "none",
-            )
-        )
-    if facts:
-        fact_lines = "; ".join(f"{f['predicate']}={f['value']}" for f in facts)
-        parts.append(f"Known about Fas: {fact_lines}.")
-    if snippets:
-        parts.append("Relevant past context: " + " | ".join(snippets))
-    return "\n".join(parts)
+    tasks_context = get_open_tasks_context()
+    emotion = detect_emotion_cue(user_text, " ".join(snippets))
+    return build_lead_prompt(state, directives, facts, snippets, tasks_context, current_emotion=emotion)
 
 
 def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
-    """Cheap flash-lite extraction: update working-state slots and durable facts deterministically."""
-    from tools.llm import generate
-
     prompt = (
         "From this exchange, extract durable state. Respond ONLY as JSON with keys: "
         '"current_project" (string or null, only if clearly stated/changed), '
         '"last_topic" (short string or null), '
         '"new_fact" (object with subject, predicate, value — ONLY if Fas explicitly stated a lasting '
-        "personal preference, opinion, or fact about himself (e.g. likes dark mode, works on project X). "
-        "Do NOT extract that Fas speaks/prefers English, or anything about the language of the conversation "
-        "itself — that is a given, not a personal fact worth remembering. If nothing qualifies, use null.\n"
+        "personal preference, opinion, or fact about himself. If nothing qualifies, use null).\n"
         f"User: {user_text}\nMike: {reply}"
     )
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
     try:
-        resp = generate(prompt, temperature=0.0, json_mode=True)
-        data = json.loads(resp.text or "{}")
+        raw = _call_gemini_rest(contents)
+        text = raw.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        clean_json = text.strip()
+        if clean_json.startswith("```"):
+            clean_json = clean_json.split("\n", 1)[-1].rsplit("\n", 1)[0].strip()
+        data = json.loads(clean_json or "{}")
     except Exception:
         return
     updates = {}
@@ -136,66 +146,75 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
 
 
 def converse(session_id: str, user_text: str) -> str:
-    """Stateful multi-turn conversation with a bounded agentic loop: Mike can check state with one
-    tool, act on what he finds with another (e.g. dispatch_coding_agent), and only then report back
-    in his own words — instead of stopping after one tool call or just describing a plan without
-    executing it."""
-    client = _get_client()
     system_prompt = _build_system_prompt(session_id, user_text)
     history = recent_turns(session_id, n=int(os.getenv("SHORT_TERM_TURN_WINDOW", "6")))
-    contents = [
-        types.Content(role=("user" if h["role"] == "user" else "model"), parts=[types.Part(text=h["text"])])
-        for h in history
-    ]
-    contents.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
 
-    cfg = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        temperature=0.2,
-        tools=TOOL_FUNCTIONS,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-    )
+    client = _get_client()
+    if client is not None:
+        mock_contents = [
+            types.SimpleNamespace(role=("user" if h["role"] == "user" else "model"), parts=[types.SimpleNamespace(text=h["text"])])
+            for h in history
+        ]
+        mock_contents.append(types.SimpleNamespace(role="user", parts=[types.SimpleNamespace(text=user_text)]))
+        cfg = types.SimpleNamespace(system_instruction=system_prompt, tools=TOOL_FUNCTIONS)
+        resp = client.models.generate_content(model=_models()[0], contents=mock_contents, config=cfg)
+        reply = (getattr(resp, "text", "") or "Done.").strip().replace("*", "")
+        append_turn(session_id, "user", user_text, None)
+        append_turn(session_id, "mike", reply, None)
+        return reply
+
+    rest_contents = []
+    for h in history:
+        rest_contents.append({"role": ("user" if h["role"] == "user" else "model"), "parts": [{"text": h["text"]}]})
+    rest_contents.append({"role": "user", "parts": [{"text": user_text}]})
+
     reply = "Command processing failed."
     steps_taken = 0
     chained = False
     max_steps = int(os.getenv("MAX_AGENTIC_STEPS", "3"))
+
     for _ in range(max_steps):
-        resp = None
+        resp_dict = None
         for model in _models():
             try:
-                resp = client.models.generate_content(model=model, contents=contents, config=cfg)
-                break
+                resp_dict = _call_gemini_rest(rest_contents, system_instruction=system_prompt, tools=TOOL_FUNCTIONS, model=model)
+                if resp_dict and "candidates" in resp_dict:
+                    break
             except Exception as exc:
                 reply = f"Brain router error: {exc}"
-        if resp is None:
+        if not resp_dict or not resp_dict.get("candidates"):
             break
-        if resp.function_calls:
-            call = resp.function_calls[0]
-            fn = TOOL_MAP.get(call.name)
-            result = str(fn(**(call.args or {}))) if fn else f"Unknown tool: {call.name}"
+        candidate = resp_dict["candidates"][0]
+        content = candidate.get("content", {})
+        parts = content.get("parts", [])
+        text_parts = [p.get("text", "") for p in parts if "text" in p]
+        func_parts = [p.get("functionCall") for p in parts if "functionCall" in p]
+        if func_parts:
+            fc = func_parts[0]
+            call_name = fc.get("name")
+            call_args = fc.get("args") or {}
+            fn = TOOL_MAP.get(call_name)
+            if fn:
+                try:
+                    result = str(fn(**call_args))
+                except Exception as exc:
+                    result = f"Tool execution error: {exc}"
+            else:
+                result = f"Unknown tool: {call_name}"
             reply = result
             steps_taken += 1
-            # Only tools that genuinely warrant a follow-up decision (investigate/act, possibly
-            # chained again, then report back) pay for a second round trip. The common instant
-            # commands (tasks, apps, media, agenda checks) return immediately like before — this
-            # is what keeps those fast; only chain for the ones that need real multi-step reasoning.
-            if call.name in _CHAINABLE_TOOLS:
+            if call_name in _CHAINABLE_TOOLS:
                 chained = True
-                # Reuse the model's own returned content (not a hand-built Part) — Gemini's
-                # thinking models attach a required thought_signature to function_call parts that
-                # gets silently dropped if you reconstruct the part yourself, breaking the next call.
-                contents.append(resp.candidates[0].content)
-                contents.append(types.Content(role="user", parts=[types.Part.from_function_response(name=call.name, response={"result": result})]))
+                rest_contents.append(content)
+                rest_contents.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": call_name, "response": {"result": result}}}],
+                })
                 continue
             break
-        reply = (resp.text or "Done.").strip().replace("*", "")
+        reply = "".join(text_parts).strip().replace("*", "")
         break
 
-    # EVERY turn goes into short-term memory (recent_turns), fast path or not — otherwise a follow-up
-    # like "what are you going to do about it" right after a fast-path agenda check has nothing to
-    # resolve "it" against, because that turn was never recorded at all. This was a real bug, not a
-    # hypothetical: the embedding/fact-extraction work is what's actually expensive, not the raw
-    # SQLite insert, so only THAT gets skipped on the fast path.
     is_simple_fast_path = steps_taken >= 1 and not chained
     if is_simple_fast_path:
         append_turn(session_id, "user", user_text, None)
@@ -203,24 +222,23 @@ def converse(session_id: str, user_text: str) -> str:
     else:
         append_turn(session_id, "user", user_text, embed(user_text))
         append_turn(session_id, "mike", reply, embed(reply))
-        # Fact/state extraction is a second Gemini call — run it in the background so it doesn't
-        # add to the latency Fas is actually waiting on for the spoken reply.
         threading.Thread(target=_extract_state_update, args=(session_id, user_text, reply), daemon=True).start()
     _maybe_run_memory_upkeep(session_id)
     return reply
 
 
+def process_turn(user_input: str, session_id: str = "default") -> str:
+    return converse(session_id, user_input)
+
+
+def route_command(user_text: str) -> str:
+    return converse(DEFAULT_SESSION, user_text)
+
+
 def _maybe_run_memory_upkeep(session_id: str) -> None:
-    """Compaction is cheap to call every turn (it no-ops under the keep_last threshold).
-    Decay is a full facts-table scan, so it's throttled to once per calendar day per process."""
     global _LAST_DECAY_DATE
     compact(session_id, keep_last=int(os.getenv("SHORT_TERM_TURN_WINDOW", "6")) * 3)
     today = datetime.date.today()
     if _LAST_DECAY_DATE != today:
         decay_facts()
         _LAST_DECAY_DATE = today
-
-
-def route_command(user_text: str) -> str:
-    """Backward-compatible single-shot entry point, routed through the default persistent session."""
-    return converse(DEFAULT_SESSION, user_text)

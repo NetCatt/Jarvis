@@ -35,8 +35,16 @@ def verify_speaker(audio_pcm: np.ndarray) -> bool:
         try:
             score = _spectral_similarity(audio_pcm, p_path)
             threshold = float(os.getenv("VOICE_MATCH_THRESHOLD", "0.55"))
-            return score >= threshold
-        except Exception:
-            pass
+            passed = score >= threshold
+            if not passed:
+                print(f"[Mike] (speaker check rejected: score {score:.2f} < threshold {threshold:.2f} — "
+                      f"re-run enroll_voice.py if this keeps happening)", flush=True)
+            return passed
+        except Exception as exc:
+            print(f"[Mike] (speaker check errored, falling back to energy gate: {exc})", flush=True)
     # No enrolled profile: this is just an energy/noise gate, not real speaker verification.
-    return float(np.std(audio_pcm)) > 250.0
+    std = float(np.std(audio_pcm))
+    passed = std > 250.0
+    if not passed:
+        print(f"[Mike] (audio too quiet to count as speech: std {std:.0f} <= 250)", flush=True)
+    return passed

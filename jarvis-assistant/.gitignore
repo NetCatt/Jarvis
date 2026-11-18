@@ -1,6 +1,10 @@
 .env
 *.env
 data/
+*.db
+*.voice
+*.voice.npy
+*.npy
 *.mp3
 .venv/
 __pycache__/
