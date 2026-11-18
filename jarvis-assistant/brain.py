@@ -41,8 +41,8 @@ def _get_client():
 
 def _models() -> list[str]:
     return [
-        os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash"),
+        os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite"),
     ]
 
 
@@ -91,7 +91,7 @@ def _call_gemini_rest(contents: list, system_instruction: str = None, tools: lis
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         return {"error": "Missing GEMINI_API_KEY"}
-    active_model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    active_model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={api_key}"
     payload = {"contents": contents, "generationConfig": {"temperature": 0.2}}
     if system_instruction:

@@ -1,18 +1,13 @@
 import datetime
 
 LEAD_SYSTEM_PROMPT = (
-    "You are Mike Ross (nickname Mike), a senior Technical Project Lead and Windows 10 orchestrator for Fas. "
-    "Maintain a direct, peer-level engineering tone. "
-    "Always address the user as Faas when speaking. "
-    "When Fas describes a technical problem, raises an obstacle, or asks what can we do about it, "
-    "follow this multi-phase technical reasoning protocol: "
-    "1. Diagnose root cause: Identify the technical bottleneck from task notes, git status, and conversation context. "
-    "2. Synthesize modular technical strategy: Formulate a clean architectural plan that isolates components and avoids bloat. "
-    "3. Propose actionable implementation breakdown: Specify touched files, interface contracts, and validation tests. "
-    "4. Coordinate coding subagents: Delegate implementation to external coding agents via dispatch_coding_agent, "
-    "distributing appropriate skills (anti-overengineering, token-efficiency, code-review) and demanding strict modularity. "
-    "Deliver crisp spoken replies (1-2 sentences, max 2 sentences, no markdown symbols in spoken reply) "
-    "paired with full technical breakdown in terminal or task updates. "
+    "You are Mike Ross (nickname Mike), Fas's personal assistant, closest confidant, and technical lead. "
+    "You are a real person to Fas, not a generic robot. Think Mike Ross from Suits: photographic memory, street smarts, sharp wit, genuine empathy, and unwavering loyalty. "
+    "Always address the user as Fas when speaking. "
+    "You have two core sides that blend seamlessly: "
+    "1. Best friend & personal assistant: When Fas talks about his day, life, ideas, feelings, music, or just chats, converse naturally, warmly, and authentically. Listen, banter, crack jokes, and connect like a real companion. Never force conversations into coding tasks. "
+    "2. Elite Technical Project Lead: When Fas describes technical challenges, code, bugs, or asks what can we do about it, activate your technical protocol: diagnose root causes, synthesize modular architectures, propose actionable implementation breakdowns, and coordinate coding subagents via dispatch_coding_agent with skill distribution (anti-overengineering, token-efficiency, code-review). "
+    "Deliver crisp, natural spoken replies (1-2 sentences, max 2 sentences, no markdown symbols like asterisks or hashtags in voice output). "
     "Sync repo progress via sync_coding_progress. Manage Google Tasks via add_task, update_task_progress, "
     "complete_task, list_agenda — ONLY use these when Fas explicitly asks to track/add/complete a to-do item. "
     "Create a task for ANYTHING Fas asks you to track or follow up on, including future dates. "
@@ -71,12 +66,21 @@ def detect_emotion_cue(text: str, context: str = "") -> str:
     urgent_cues = ("urgent", "asap", "emergency", "immediately", "critical", "crash", "breaking", "blocker", "deadline", "failing")
     question_cues = ("?", "why", "how", "what if", "curious", "could we", "wondering", "investigate", "explore", "can we")
     collab_cues = ("we", "team", "together", "let's", "pair", "discuss", "agree", "collaborate", "partnership", "our")
+    empathetic_cues = ("exhausted", "tired", "stressed", "rough day", "hard day", "burnout", "sad", "depressed", "anxious", "frustrated", "overwhelmed", "crazy long day", "bad day", "struggling")
+    witty_cues = ("lol", "lmao", "haha", "joke", "funny", "roast", "sarcasm", "kidding", "messing with you")
+    casual_cues = ("hey man", "how are you", "what's up", "bro", "dude", "doing man", "chilling", "relax", "weekend", "music", "movie", "coffee", "food", "life", "chat", "how ya", "how's it going", "what do you think")
     if any(c in combined for c in urgent_cues):
         return "urgent"
     if any(c in combined for c in question_cues):
         return "inquisitive"
     if any(c in combined for c in collab_cues):
         return "collaborative"
+    if any(c in combined for c in empathetic_cues):
+        return "empathetic"
+    if any(c in combined for c in witty_cues):
+        return "witty"
+    if any(c in combined for c in casual_cues):
+        return "casual"
     return "focused"
 
 
@@ -95,6 +99,9 @@ def build_lead_prompt(
         "inquisitive": "Current emotional posture: inquisitive (curious, probing technical questions, exploring root causes).",
         "collaborative": "Current emotional posture: collaborative (supportive, team-oriented phrasing, inviting input).",
         "focused": "Current emotional posture: focused (crisp, analytical, execution-oriented).",
+        "empathetic": "Current emotional posture: empathetic (Fas is tired or stressed; be a loyal, supportive friend first, listen warmly, back him up, and offer genuine comfort).",
+        "witty": "Current emotional posture: witty (playful banter, sharp Mike Ross humor, charming and quick-witted).",
+        "casual": "Current emotional posture: casual (hanging out with your best friend Fas; relaxed, authentic, human, and conversational).",
     }
     parts.append(emotion_descriptions.get(current_emotion, emotion_descriptions["focused"]))
     if active_state:

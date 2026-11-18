@@ -11,7 +11,7 @@ def _speak_fish_stream(text: str, emotion: str = "focused") -> bool:
     if not key or not mid:
         return False
     sample_rate = 24000
-    speed = 1.15 if emotion == "urgent" else 0.95 if emotion == "collaborative" else 1.0
+    speed = 1.15 if emotion == "urgent" else 0.95 if emotion in ("collaborative", "empathetic") else 1.05 if emotion == "witty" else 1.0
     payload = json.dumps({
         "text": text,
         "reference_id": mid,
