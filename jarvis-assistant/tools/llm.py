@@ -16,8 +16,8 @@ def _get_client():
 
 def _models() -> list[str]:
     return [
-        os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash"),
+        os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite"),
     ]
 
 
