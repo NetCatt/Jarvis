@@ -29,9 +29,7 @@ def _handle_speech_turn(transcriber: StreamingTranscriber, transcript: str, sess
     if not clean_text:
         return
     if "standby" in clean_text.lower():
-        IS_ACTIVE = False
-        speak("Entering standby mode, Fas.")
-        return
+        IS_ACTIVE = False; speak("Entering standby mode, Fas."); return
     has_wake = check_wake_phrase(clean_text)
     grace_sec = float(os.getenv("WAKE_GRACE_SEC", "30"))
     in_grace = (time.time() - _LAST_REPLY_TIME) < grace_sec
@@ -44,33 +42,27 @@ def _handle_speech_turn(transcriber: StreamingTranscriber, transcript: str, sess
         command_text = stripped.strip() if matched and stripped.strip() else clean_text
     if not command_text or (has_wake and clean_text.lower() in ("mike", "hey mike", "ross", "hey ross")):
         reply = "I'm right here, Fas. What do you need?"
-        print(f"\n[Fas]: {clean_text}")
-        print(f"[Mike]: {reply}")
-        speak(reply)
-        _LAST_REPLY_TIME = time.time()
-        return
+        print(f"\n[Fas]: {clean_text}\n[Mike]: {reply}")
+        speak(reply); _LAST_REPLY_TIME = time.time(); return
     print(f"\n[Fas]: {command_text}")
     reply = process_turn(command_text, session_id=session_id)
     print(f"[Mike]: {reply}")
-    speak(reply)
-    _LAST_REPLY_TIME = time.time()
+    speak(reply); _LAST_REPLY_TIME = time.time()
 
 
 def run_orchestrator() -> None:
     global IS_ACTIVE, _LAST_REPLY_TIME
     init_db()
     session_id = os.getenv("VOICE_SESSION_ID", "voice")
-    user = os.getenv("USER_NAME", "Fas")
-    name = os.getenv("ASSISTANT_NAME", "Mike Ross")
+    user, name = os.getenv("USER_NAME", "Fas"), os.getenv("ASSISTANT_NAME", "Mike Ross")
     greeting = f"Hello {user}. {name} is online and ready."
-    print(f"\n[Mike]: {greeting}")
-    print("[Mike]: Listening for voice commands... (Press F9 for Standby, Ctrl+C to quit)\n")
-    speak(greeting)
-    _LAST_REPLY_TIME = time.time()
+    print(f"\n[Mike]: {greeting}\n[Mike]: Listening for voice commands... (Press F9 for Standby, Ctrl+C to quit)\n")
+    speak(greeting); _LAST_REPLY_TIME = time.time()
 
     transcriber = StreamingTranscriber()
     endpoint = DynamicVoiceEndpoint(vad_mode=int(os.getenv("VAD_MODE", "2")))
     transcriber.start()
+    last_rendered = ""
 
     try:
         import sounddevice as sd
@@ -79,27 +71,23 @@ def run_orchestrator() -> None:
             while True:
                 if check_hotkey(0x78):
                     IS_ACTIVE = not IS_ACTIVE
-                    speak(f"Active mode, {user}" if IS_ACTIVE else f"Standby mode, {user}")
-                    time.sleep(0.3)
+                    speak(f"Active mode, {user}" if IS_ACTIVE else f"Standby mode, {user}"); time.sleep(0.3)
                 pcm_data, _ = stream.read(frame_len)
                 if not IS_ACTIVE:
-                    time.sleep(0.02)
-                    continue
+                    time.sleep(0.02); continue
                 pcm_bytes = pcm_data.tobytes()
                 partial_text, is_final = transcriber.feed_pcm(pcm_bytes)
-                if partial_text:
-                    render_live_token(partial_text)
+                if partial_text and partial_text != last_rendered:
+                    render_live_token(partial_text); last_rendered = partial_text
                 is_speech, is_endpoint = endpoint.process_frame(pcm_bytes, partial_text)
                 if is_endpoint and partial_text:
                     final_text = (transcriber.get_final() or partial_text).strip()
                     if final_text.lower().strip(".,!?") in ("um", "uh", "er", "ah", "hmm", "umm", "uhh"):
-                        endpoint.reset()
-                        continue
+                        endpoint.reset(); continue
+                    sys.stdout.write("\r\033[K"); sys.stdout.flush(); last_rendered = ""
                     stream.stop()
                     _handle_speech_turn(transcriber, final_text, session_id, endpoint)
-                    transcriber.reset()
-                    endpoint.reset()
-                    stream.start()
+                    transcriber.reset(); endpoint.reset(); stream.start()
     except KeyboardInterrupt:
         pass
     finally:

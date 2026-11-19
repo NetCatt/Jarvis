@@ -8,7 +8,10 @@ import time
 
 def render_live_token(text: str) -> None:
     if text:
-        sys.stdout.write(f"\r\033[K[Fas, live]: {text}")
+        clean = text.strip().replace("\n", " ")
+        if len(clean) > 65:
+            clean = "..." + clean[-62:]
+        sys.stdout.write(f"\r\033[K[Fas, live]: {clean}")
         sys.stdout.flush()
 
 class StreamingTranscriber:

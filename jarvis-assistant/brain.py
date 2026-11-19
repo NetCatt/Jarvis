@@ -44,8 +44,8 @@ def _get_client():
 
 def _models() -> list[str]:
     return [
-        os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite"),
+        os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3-flash-preview"),
         "gemini-3.1-flash-lite",
     ]
 
@@ -104,7 +104,7 @@ def _call_gemini_rest(contents: list, system_instruction: str = None, tools: lis
         payload["tools"] = [{"functionDeclarations": _build_tool_declarations(tools)}]
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    timeout_sec = float(os.getenv("GEMINI_TIMEOUT_SEC", "8.0"))
+    timeout_sec = float(os.getenv("GEMINI_TIMEOUT_SEC", "3.5"))
     with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

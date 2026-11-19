@@ -29,7 +29,7 @@ def main():
             else:
                 model_path, _ = get_model_for_language("en", ModelArch.MEDIUM_STREAMING)
         sample_rate = int(os.getenv("MOONSHINE_SAMPLE_RATE", "16000"))
-        update_interval = float(os.getenv("MOONSHINE_UPDATE_INTERVAL", "0.15"))
+        update_interval = float(os.getenv("MOONSHINE_UPDATE_INTERVAL", "0.35"))
         transcriber = Transcriber(model_path, model_arch=ModelArch.MEDIUM_STREAMING, update_interval=update_interval)
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
