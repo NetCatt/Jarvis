@@ -33,10 +33,7 @@ def test_dynamic_vad_endpointing_happy_path(pcm_factory):
 
 
 def test_streaming_transcriber_startup_and_stop():
-    model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models", "vosk-model-en-us-0.22-lgraph"))
-    if not os.path.exists(model_path):
-        pytest.skip("Vosk model not present")
-    stt = StreamingTranscriber(model_path=model_path)
+    stt = StreamingTranscriber()
     stt.start()
     assert stt.process is not None
     assert stt.process.poll() is None

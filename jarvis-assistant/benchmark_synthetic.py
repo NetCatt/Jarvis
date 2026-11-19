@@ -145,15 +145,10 @@ class SyntheticBenchmark:
 
     def benchmark_streaming_transcriber(self):
         t0 = time.perf_counter()
-        model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "models", "vosk-model-en-us-0.22-lgraph"))
-        if not os.path.exists(model_path):
-            self._record("Streaming Transcriber Startup", True, "Model not present, skipped", 0.0)
-            return True
-
-        stt = StreamingTranscriber(model_path=model_path)
+        stt = StreamingTranscriber()
         stt.start()
         if not stt.process or stt.process.poll() is not None:
-            self._record("Streaming Transcriber Startup", False, "Vosk worker process not running", 0.0)
+            self._record("Streaming Transcriber Startup", False, "Moonshine worker process not running", 0.0)
             return False
 
         transcript, is_final = stt.feed_pcm(self._silence_frame())
@@ -175,7 +170,7 @@ class SyntheticBenchmark:
             return False
 
         elapsed = (time.perf_counter() - t0) * 1000
-        self._record("Streaming STT & Live Rendering", True, "Vosk worker IPC & ANSI token streaming verified", elapsed)
+        self._record("Streaming STT & Live Rendering", True, "Moonshine worker IPC & ANSI token streaming verified", elapsed)
         return True
 
     def benchmark_memory_engine(self):

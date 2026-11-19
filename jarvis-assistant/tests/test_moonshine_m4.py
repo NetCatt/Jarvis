@@ -73,25 +73,23 @@ def test_streaming_transcriber_explicit_moonshine_engine():
     assert stt.active_engine == "moonshine"
     stt.stop()
 
-def test_streaming_transcriber_fallback_when_moonshine_fails():
+def test_streaming_transcriber_raises_when_moonshine_fails():
     old_env = os.environ.get("MOONSHINE_MODEL_PATH")
     os.environ["MOONSHINE_MODEL_PATH"] = "C:/nonexistent_dir_for_fallback_test"
     try:
-        stt = StreamingTranscriber(engine="auto")
-        stt.start()
-        assert stt.active_engine == "vosk"
-        stt.feed_pcm(b"\x00" * 640)
-        stt.stop()
+        stt = StreamingTranscriber()
+        with pytest.raises(RuntimeError):
+            stt.start()
     finally:
         if old_env is not None:
             os.environ["MOONSHINE_MODEL_PATH"] = old_env
         else:
             os.environ.pop("MOONSHINE_MODEL_PATH", None)
 
-def test_streaming_transcriber_explicit_vosk_engine():
-    stt = StreamingTranscriber(engine="vosk")
+def test_streaming_transcriber_moonshine_engine():
+    stt = StreamingTranscriber()
     stt.start()
-    assert stt.active_engine == "vosk"
+    assert stt.active_engine == "moonshine"
     transcript, _ = stt.feed_pcm(b"\x00" * 640)
     stt.stop()
 

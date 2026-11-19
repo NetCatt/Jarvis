@@ -12,10 +12,10 @@ def render_live_token(text: str) -> None:
         sys.stdout.flush()
 
 class StreamingTranscriber:
-    def __init__(self, model_path: str = None, sample_rate: int = 16000, engine: str = "auto"):
+    def __init__(self, model_path: str = None, sample_rate: int = 16000, engine: str = "moonshine"):
         self.model_path = model_path
         self.sample_rate = sample_rate
-        self.engine = (engine or os.getenv("STT_ENGINE", "auto")).lower()
+        self.engine = "moonshine"
         self.active_engine = None
         self.process = None
         self.out_queue = queue.Queue()
@@ -30,32 +30,16 @@ class StreamingTranscriber:
         if self.process and self.process.poll() is None:
             return
         self.stop_event.clear()
-        target_engine = self.engine
-        is_explicit_vosk = False
-        if self.model_path:
-            mp_lower = self.model_path.lower()
-            if "vosk" in mp_lower:
-                is_explicit_vosk = True
-            elif os.path.isdir(self.model_path) and (
-                os.path.exists(os.path.join(self.model_path, "am"))
-                or os.path.exists(os.path.join(self.model_path, "model.conf"))
-            ):
-                is_explicit_vosk = True
-        if not is_explicit_vosk and target_engine in ("auto", "moonshine"):
-            if self._try_start_moonshine():
-                self.active_engine = "moonshine"
-                return
-            sys.stderr.write("STT: Moonshine worker unavailable, falling back to Vosk worker\n")
-            sys.stderr.flush()
-        self._start_vosk()
-        self.active_engine = "vosk"
+        if not self._try_start_moonshine():
+            raise RuntimeError("Failed to start moonshine_worker")
+        self.active_engine = "moonshine"
 
     def _try_start_moonshine(self) -> bool:
         worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "moonshine_worker.py")
         if not os.path.isfile(worker_script):
             return False
         env = os.environ.copy()
-        if self.model_path and "vosk" not in self.model_path.lower():
+        if self.model_path:
             env["MOONSHINE_MODEL_PATH"] = self.model_path
         env["MOONSHINE_SAMPLE_RATE"] = str(self.sample_rate)
         try:
@@ -106,34 +90,6 @@ class StreamingTranscriber:
         self.stderr_thread = threading.Thread(target=self._stderr_loop, daemon=True)
         self.stderr_thread.start()
         return True
-
-    def _start_vosk(self) -> None:
-        worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vosk_worker.py")
-        env = os.environ.copy()
-        if self.model_path:
-            env["VOSK_MODEL_PATH"] = self.model_path
-        env["VOSK_SAMPLE_RATE"] = str(self.sample_rate)
-        proc = subprocess.Popen(
-            [sys.executable, "-u", worker_script],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-            env=env,
-        )
-        ready_line = proc.stdout.readline().decode("utf-8", errors="replace").strip()
-        if ready_line != "READY":
-            err = proc.stderr.read().decode("utf-8", errors="replace")
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-            raise RuntimeError(f"Failed to start vosk_worker: {ready_line} {err}")
-        self.process = proc
-        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self.reader_thread.start()
-        self.stderr_thread = threading.Thread(target=self._stderr_loop, daemon=True)
-        self.stderr_thread.start()
 
     def _stderr_loop(self) -> None:
         while not self.stop_event.is_set():
