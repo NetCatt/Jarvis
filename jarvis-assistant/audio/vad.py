@@ -12,7 +12,10 @@ class DynamicVoiceEndpoint:
         self.hangover_buffer = collections.deque(maxlen=12)
         self.silence_ms = 0
         self.triggered = False
-        self.conjunctions = {"and", "or", "to", "because", "with", "but"}
+        self.conjunctions = {
+            "and", "or", "to", "because", "with", "but", "so", "that", "if",
+            "when", "while", "then", "since", "as", "like", "for",
+        }
 
     def reset(self) -> None:
         self.hangover_buffer.clear()

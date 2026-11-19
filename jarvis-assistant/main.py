@@ -90,9 +90,12 @@ def run_orchestrator() -> None:
                 if partial_text:
                     render_live_token(partial_text)
                 is_speech, is_endpoint = endpoint.process_frame(pcm_bytes, partial_text)
-                if (is_endpoint or is_final) and partial_text:
-                    final_text = transcriber.get_final() if not is_final else partial_text
-                    _handle_speech_turn(transcriber, final_text or partial_text, session_id, endpoint)
+                if is_endpoint and partial_text:
+                    final_text = (transcriber.get_final() or partial_text).strip()
+                    if final_text.lower().strip(".,!?") in ("um", "uh", "er", "ah", "hmm", "umm", "uhh"):
+                        endpoint.reset()
+                        continue
+                    _handle_speech_turn(transcriber, final_text, session_id, endpoint)
                     stream.stop()
                     transcriber.reset()
                     endpoint.reset()

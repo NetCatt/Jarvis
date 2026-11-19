@@ -104,7 +104,8 @@ def _call_gemini_rest(contents: list, system_instruction: str = None, tools: lis
         payload["tools"] = [{"functionDeclarations": _build_tool_declarations(tools)}]
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30.0) as resp:
+    timeout_sec = float(os.getenv("GEMINI_TIMEOUT_SEC", "8.0"))
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
