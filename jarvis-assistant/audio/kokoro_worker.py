@@ -8,6 +8,7 @@ def main():
         import sounddevice as sd
         import torch
         from kokoro import KPipeline
+        torch.set_num_threads(2)
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         voice_pt = os.path.join(base_dir, "data", "ross.pt")
         pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
@@ -32,11 +33,11 @@ def main():
             speed = float(req.get("speed", 1.0))
             if text:
                 generator = pipeline(text, voice=voice, speed=speed)
-                chunks = [r.audio for r in generator if hasattr(r, "audio")]
-                if chunks:
-                    audio = torch.cat(chunks).cpu().numpy()
-                    sd.play(audio, 24000)
-                    sd.wait()
+                with sd.OutputStream(samplerate=24000, channels=1, dtype="float32") as stream:
+                    for result in generator:
+                        if hasattr(result, "audio"):
+                            chunk = result.audio.cpu().numpy()
+                            stream.write(chunk)
             sys.stdout.write(json.dumps({"status": "done"}) + "\n")
             sys.stdout.flush()
         except Exception as exc:
