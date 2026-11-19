@@ -2,8 +2,11 @@ import datetime
 import inspect
 import json
 import os
+import re
 import threading
+import time
 import types
+import urllib.error
 import urllib.request
 from dotenv import load_dotenv
 
@@ -41,8 +44,9 @@ def _get_client():
 
 def _models() -> list[str]:
     return [
-        os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite"),
+        os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite"),
+        "gemini-3.1-flash-lite",
     ]
 
 
@@ -91,7 +95,7 @@ def _call_gemini_rest(contents: list, system_instruction: str = None, tools: lis
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         return {"error": "Missing GEMINI_API_KEY"}
-    active_model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    active_model = model or os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={api_key}"
     payload = {"contents": contents, "generationConfig": {"temperature": 0.2}}
     if system_instruction:
@@ -145,7 +149,54 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
         upsert_fact(fact["subject"], fact["predicate"], fact["value"])
 
 
+def _try_fast_action(user_text: str) -> str | None:
+    low = user_text.lower().strip()
+    if any(k in low for k in ("open youtube", "turn on youtube", "launch youtube", "play youtube", "open a song on youtube")):
+        from tools.media import open_browser
+        open_browser("https://www.youtube.com")
+        return "Opening YouTube for you now, Fas."
+    if any(k in low for k in ("can you turn on youtube", "can you open youtube")):
+        from tools.media import open_browser
+        open_browser("https://www.youtube.com")
+        return "Opening YouTube for you now, Fas."
+    if "open a song" in low or "play a song" in low or "play music" in low or low.startswith("play "):
+        from tools.media import play_music
+        cleaned = re.sub(r"^(can you\s+)?(open\s+a\s+song(\s+for\s+me)?|play\s+a\s+song(\s+for\s+me)?|play\s+music|play)\s*", "", low).strip("?.! ")
+        play_music(cleaned or "lofi beats")
+        return f"Playing {cleaned or 'music'} for you now, Fas."
+    if any(k in low for k in ("what is on my agenda", "what's on my agenda", "my agenda", "today's agenda", "list tasks", "what do i have today")):
+        from tools.tasks import list_agenda
+        return list_agenda(when="today")
+    if low.startswith("add task ") or low.startswith("create task "):
+        from tools.tasks import add_task
+        title = re.sub(r"^(add task|create task)\s*", "", low).strip("?.! ")
+        if title:
+            return add_task(title)
+    if low.startswith("search google for ") or low.startswith("google "):
+        from tools.media import search_google
+        query = re.sub(r"^(search google for |google )", "", low).strip("?.! ")
+        if query:
+            return search_google(query)
+    if low.startswith("open browser") or low == "open the browser":
+        from tools.media import open_browser
+        open_browser("https://www.google.com")
+        return "Opening the browser for you now, Fas."
+    if low.startswith("open app ") or low.startswith("launch app "):
+        from tools.apps import open_app
+        app_name = re.sub(r"^(open app |launch app )", "", low).strip("?.! ")
+        if app_name:
+            return open_app(app_name)
+    return None
+
+
 def converse(session_id: str, user_text: str) -> str:
+    fast_reply = _try_fast_action(user_text)
+    if fast_reply:
+        append_turn(session_id, "user", user_text, None)
+        append_turn(session_id, "mike", fast_reply, None)
+        _maybe_run_memory_upkeep(session_id)
+        return fast_reply
+
     system_prompt = _build_system_prompt(session_id, user_text)
     history = recent_turns(session_id, n=int(os.getenv("SHORT_TERM_TURN_WINDOW", "6")))
 
@@ -176,13 +227,33 @@ def converse(session_id: str, user_text: str) -> str:
     for _ in range(max_steps):
         resp_dict = None
         for model in _models():
-            try:
-                resp_dict = _call_gemini_rest(rest_contents, system_instruction=system_prompt, tools=TOOL_FUNCTIONS, model=model)
-                if resp_dict and "candidates" in resp_dict:
+            for attempt in range(2):
+                try:
+                    resp_dict = _call_gemini_rest(rest_contents, system_instruction=system_prompt, tools=TOOL_FUNCTIONS, model=model)
+                    if resp_dict and "candidates" in resp_dict:
+                        break
+                except urllib.error.HTTPError as exc:
+                    reply = f"Brain router error: {exc}"
+                    if exc.code in (503, 429) and attempt == 0:
+                        time.sleep(0.5)
+                        continue
                     break
-            except Exception as exc:
-                reply = f"Brain router error: {exc}"
+                except Exception as exc:
+                    reply = f"Brain router error: {exc}"
+                    break
+            if resp_dict and "candidates" in resp_dict:
+                break
         if not resp_dict or not resp_dict.get("candidates"):
+            try:
+                from local_brain import query_local_brain
+                local_reply = query_local_brain(system_prompt, user_text, history)
+                if local_reply:
+                    reply = local_reply
+                    break
+            except Exception:
+                pass
+            if "503" in reply or "Service Unavailable" in reply or "failed" in reply.lower():
+                reply = "I'm right here with you, Fas. Cloud link hit a bump, but I've got your back. What's on your mind?"
             break
         candidate = resp_dict["candidates"][0]
         content = candidate.get("content", {})
