@@ -11,6 +11,8 @@ class DynamicVoiceEndpoint:
         self.expected_frame_len = int(self.sample_rate * (self.frame_ms / 1000) * 2)
         self.hangover_buffer = collections.deque(maxlen=12)
         self.silence_ms = 0
+        self.stagnant_ms = 0
+        self.last_text = ""
         self.triggered = False
         self.conjunctions = {
             "and", "or", "to", "because", "with", "but", "so", "that", "if",
@@ -20,6 +22,8 @@ class DynamicVoiceEndpoint:
     def reset(self) -> None:
         self.hangover_buffer.clear()
         self.silence_ms = 0
+        self.stagnant_ms = 0
+        self.last_text = ""
         self.triggered = False
 
     def strip_stop_phrase(self, text: str) -> str:
@@ -41,7 +45,7 @@ class DynamicVoiceEndpoint:
         raw_speech = self.vad.is_speech(pcm_frame, self.sample_rate)
         self.hangover_buffer.append(raw_speech)
         ratio = sum(self.hangover_buffer) / len(self.hangover_buffer)
-        smoothed_speech = ratio > 0.15
+        smoothed_speech = ratio >= 0.35
         clean_text = current_transcript.rstrip(" .,!?").lower() if current_transcript else ""
         if self.stop_phrase and (clean_text == self.stop_phrase or clean_text.endswith(" " + self.stop_phrase)):
             return smoothed_speech, True
@@ -49,6 +53,8 @@ class DynamicVoiceEndpoint:
             if raw_speech or (clean_text and len(clean_text) > 0):
                 self.triggered = True
                 self.silence_ms = 0
+                self.stagnant_ms = 0
+                self.last_text = clean_text
             else:
                 return False, False
         words = clean_text.split() if clean_text else []
@@ -59,10 +65,15 @@ class DynamicVoiceEndpoint:
             threshold_ms = 1200
         else:
             threshold_ms = 800
+        if clean_text and clean_text == self.last_text:
+            self.stagnant_ms += self.frame_ms
+        else:
+            self.last_text = clean_text
+            self.stagnant_ms = 0
         if smoothed_speech:
             self.silence_ms = 0
         else:
             self.silence_ms += self.frame_ms
-            if self.silence_ms >= threshold_ms:
-                return smoothed_speech, True
+        if self.silence_ms >= threshold_ms or (words and self.stagnant_ms >= threshold_ms + 400):
+            return smoothed_speech, True
         return smoothed_speech, False

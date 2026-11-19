@@ -95,8 +95,8 @@ def run_orchestrator() -> None:
                     if final_text.lower().strip(".,!?") in ("um", "uh", "er", "ah", "hmm", "umm", "uhh"):
                         endpoint.reset()
                         continue
-                    _handle_speech_turn(transcriber, final_text, session_id, endpoint)
                     stream.stop()
+                    _handle_speech_turn(transcriber, final_text, session_id, endpoint)
                     transcriber.reset()
                     endpoint.reset()
                     stream.start()
