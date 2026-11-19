@@ -4,7 +4,7 @@ import urllib.request
 import zipfile
 
 GGUF_URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
-RUNNER_URL = "https://github.com/ggerganov/llama.cpp/releases/download/b4540/llama-b4540-bin-win-avx2-x64.zip"
+RUNNER_URL = "https://github.com/ggerganov/llama.cpp/releases/download/b12547/llama-b12547-bin-win-cpu-x64.zip"
 
 
 def _download_file(url: str, dest_path: str) -> None:

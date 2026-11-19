@@ -13,3 +13,5 @@ temp_reply.mp3
 NEXT_PLAN.md
 *.log
 models/
+tools/bin/
+.venv-kokoro/
