@@ -198,6 +198,9 @@ def _try_fast_action(user_text: str) -> str | None:
     if any(k in low for k in ("what is on my agenda", "what's on my agenda", "my agenda", "today's agenda", "list tasks", "what do i have today")):
         from tools.tasks import list_agenda
         return list_agenda(when="today")
+    if any(k in low for k in ("what did we complete", "tasks completed", "which tasks that we complete", "which tasks did we complete", "completed tasks")):
+        from tools.tasks import list_agenda
+        return list_agenda(when="completed")
     if low.startswith("add task ") or low.startswith("create task "):
         from tools.tasks import add_task
         title = re.sub(r"^(add task|create task)\s*", "", low).strip("?.! ")
@@ -220,13 +223,36 @@ def _try_fast_action(user_text: str) -> str | None:
     return None
 
 
+def _is_system_intent(text: str) -> bool:
+    low = text.lower()
+    system_keywords = (
+        "volume", "sound", "louder", "quieter", "softer", "mute",
+        "open folder", "directory", "folder",
+        "search file", "find file", "look for file", "search for file",
+        "open app", "launch app", "open application",
+        "browser", "youtube", "spotify", "play music", "play song",
+        "open vscode", "open terminal", "open chrome"
+    )
+    return any(k in low for k in system_keywords)
+
+
 def _sanitize_spoken_reply(raw_text: str) -> str:
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     if not lines:
         return "Done."
     filtered = []
+    stage_regex = re.compile(
+        r"^(?:mike\s+(?:is|calls|says|thinks|refers|notes|replies|agrees|laughs)|"
+        r"mike's\s+tone|the\s+system\s+is|fas\s+(?:is|requests|asks|mentions)).*",
+        re.IGNORECASE
+    )
     for line in lines:
-        low = line.lower()
+        cleaned = re.sub(r"\(.*?\)", "", line).strip()
+        if not cleaned:
+            continue
+        low = cleaned.lower()
+        if stage_regex.match(low):
+            continue
         if any(low.startswith(p) for p in (
             "mike refers to",
             "the user and mike",
@@ -241,9 +267,9 @@ def _sanitize_spoken_reply(raw_text: str) -> str:
             "spoken output directive",
         )):
             continue
-        filtered.append(line)
+        filtered.append(cleaned)
     text = " ".join(filtered).strip().replace("*", "")
-    return text or "Done."
+    return text or "I'm on it, Fas."
 
 
 def converse(session_id: str, user_text: str) -> str:
@@ -272,11 +298,12 @@ def converse(session_id: str, user_text: str) -> str:
         append_turn(session_id, "mike", reply, None)
         return reply
 
-    local_first = os.getenv("LOCAL_BRAIN_FIRST", "true").lower() in ("true", "1", "yes")
-    if local_first and _call_gemini_rest == _ORIG_CALL_GEMINI_REST:
+    mode = os.getenv("ROUTING_MODE", os.getenv("LOCAL_BRAIN_FIRST", "hybrid")).lower()
+    local_target = (mode in ("true", "1", "local")) or (mode in ("hybrid", "auto") and _is_system_intent(user_text))
+    if local_target and _call_gemini_rest == _ORIG_CALL_GEMINI_REST:
         try:
             from local_brain import execute_local_turn
-            local_reply = execute_local_turn(user_text, history)
+            local_reply = execute_local_turn(user_text, history, system_prompt=system_prompt)
             if local_reply:
                 reply = _sanitize_spoken_reply(local_reply)
                 append_turn(session_id, "user", user_text, embed(user_text))
@@ -319,7 +346,7 @@ def converse(session_id: str, user_text: str) -> str:
         if not resp_dict or not resp_dict.get("candidates"):
             try:
                 from local_brain import execute_local_turn
-                local_reply = execute_local_turn(user_text, history)
+                local_reply = execute_local_turn(user_text, history, system_prompt=system_prompt)
                 if local_reply:
                     reply = _sanitize_spoken_reply(local_reply)
                     break

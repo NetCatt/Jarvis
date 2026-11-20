@@ -223,3 +223,42 @@ def test_local_brain_tool_parsing_and_execution(monkeypatch):
     assert "Opened models folder" in turn_res
 
 
+def test_sanitize_screenplay_and_stage_directions():
+    from brain import _sanitize_spoken_reply, _is_system_intent
+
+    dirty = "Mike is now Fas, the tech lead. Fas requests a video.\nMike's tone changes to a serious one.\nI'm on it, Fas."
+    clean = _sanitize_spoken_reply(dirty)
+    assert clean == "I'm on it, Fas."
+
+    paren = "(whispers) I will take care of this immediately."
+    clean_paren = _sanitize_spoken_reply(paren)
+    assert clean_paren == "I will take care of this immediately."
+
+    assert _is_system_intent("turn the volume to 50")
+    assert _is_system_intent("open folder downloads")
+    assert not _is_system_intent("What is the roadmap for Redis optimization?")
+
+
+def test_tasks_context_completed_items(monkeypatch):
+    from tools.tasks import get_completed_tasks_raw, get_open_tasks_context, list_agenda
+
+    mock_tasks = [
+        {"id": "t1", "title": "Task 1", "status": "completed"},
+        {"id": "t2", "title": "Task 2", "status": "needsAction"}
+    ]
+    monkeypatch.setattr("tools.tasks._has_oauth", lambda: False)
+    monkeypatch.setattr("tools.tasks._read_local_tasks", lambda name: mock_tasks)
+
+    completed = get_completed_tasks_raw()
+    assert len(completed) == 1
+    assert completed[0]["title"] == "Task 1"
+
+    ctx = get_open_tasks_context()
+    assert "Task 2" in ctx
+    assert "[Completed] Task 1" in ctx
+
+    agenda_comp = list_agenda(when="completed")
+    assert "Task 1" in agenda_comp
+
+
+

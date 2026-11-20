@@ -248,8 +248,16 @@ class StreamingTranscriber:
             try:
                 self.process.stdin.write(b"CMD:RESET".ljust(640, b"\x00"))
                 self.process.stdin.flush()
+                time.sleep(0.01)
             except Exception:
                 pass
+        while not self.out_queue.empty():
+            try:
+                self.out_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.finalized_chunks = []
+        self.current_partial = ""
 
     def stop(self) -> None:
         self.stop_event.set()

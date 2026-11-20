@@ -43,9 +43,10 @@ def main():
         try:
             transcriber.set_keyterms([
                 "Fas", "Faas", "Mike", "Ross", "agenda", "Daily Agenda", "project", "repo",
-                "subproject", "task", "list", "Redis", "caching", "standby", "tag", "flag",
+                "subproject", "task", "tasks", "list", "Redis", "caching", "standby", "tag", "flag",
                 "isolate", "code", "branch", "git", "status", "tests", "benchmark", "folder",
-                "browser", "YouTube", "Spotify", "upcoming", "neither"
+                "browser", "YouTube", "Spotify", "upcoming", "neither", "progress", "extension",
+                "complete", "completed", "due", "context", "today", "volume", "percent", "downloads", "search"
             ])
         except Exception:
             pass

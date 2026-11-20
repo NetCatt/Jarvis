@@ -227,29 +227,61 @@ def get_open_tasks_raw(list_name: str = "") -> list[dict]:
         return [t for t in _read_local_tasks(target) if t.get("status") != "completed"]
 
 
+def get_completed_tasks_raw(list_name: str = "") -> list[dict]:
+    target = list_name or _default_list_name()
+    if not _has_oauth():
+        return [t for t in _read_local_tasks(target) if t.get("status") == "completed"]
+    try:
+        _, lid = get_service_and_list_id(target)
+        if not lid:
+            return [t for t in _read_local_tasks(target) if t.get("status") == "completed"]
+        data = _tasks_rest("GET", f"lists/{lid}/tasks?showCompleted=true&showHidden=true&maxResults=20")
+        items = data.get("items", [])
+        return [
+            {"id": str(t.get("id") or ""), "title": str(t.get("title") or "").strip(), "notes": str(t.get("notes") or "").strip(), "status": "completed"}
+            for t in items if str(t.get("status") or "") == "completed" and str(t.get("title") or "").strip()
+        ]
+    except Exception:
+        return [t for t in _read_local_tasks(target) if t.get("status") == "completed"]
+
+
 def get_open_tasks_context(list_name: str = "") -> str:
     target = list_name or _default_list_name()
     tasks = get_open_tasks_raw(target)
-    if not tasks:
-        return "No open tasks."
+    completed = get_completed_tasks_raw(target)
     lines = []
-    for t in tasks:
-        title = str(t.get("title") or "").strip()
-        notes = str(t.get("notes") or "").strip()
-        due = str(t.get("due") or "").strip()
-        due_str = f" (due: {due})" if due else ""
-        if notes:
-            lines.append(f"- {title}{due_str}:\n  Notes: {notes}")
-        else:
-            lines.append(f"- {title}{due_str}")
+    if tasks:
+        lines.append("Open Tasks:")
+        for t in tasks:
+            title = str(t.get("title") or "").strip()
+            notes = str(t.get("notes") or "").strip()
+            due = str(t.get("due") or "").strip()
+            due_str = f" (due: {due})" if due else ""
+            if notes:
+                lines.append(f"- {title}{due_str}:\n  Notes: {notes}")
+            else:
+                lines.append(f"- {title}{due_str}")
+    else:
+        lines.append("No open tasks.")
+    if completed:
+        lines.append("Recently Completed Tasks:")
+        for t in completed[:5]:
+            title = str(t.get("title") or "").strip()
+            lines.append(f"- [Completed] {title}")
     return "\n".join(lines)
 
 
 def list_agenda(when: str = "all", list_name: str = "") -> str:
     target = list_name or _default_list_name()
-    tasks = get_open_tasks_raw(target)
     tag = " (Local)" if not _has_oauth() else ""
     label = f"'{target}'" if list_name else "Daily Agenda"
+    if when.lower().strip() == "completed":
+        completed = get_completed_tasks_raw(target)
+        if not completed:
+            return f"No completed tasks found in {label}{tag}."
+        items = [str(t.get("title") or "Untitled") for t in completed[:6]]
+        return f"{len(completed)} completed in {label}{tag}: {'; '.join(items)}."
+    tasks = get_open_tasks_raw(target)
     if when.lower().strip() == "today":
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         tasks = [t for t in tasks if str(t.get("due") or "") == today]
