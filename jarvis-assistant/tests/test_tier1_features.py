@@ -187,3 +187,39 @@ def test_sanitize_spoken_reply_strips_hallucinated_facts():
     assert "The user and Mike" not in cleaned
     assert "Accountability is" not in cleaned
 
+
+def test_open_folder_and_search_files(monkeypatch):
+    from tools.apps import open_folder, search_files
+
+    opened = []
+    monkeypatch.setattr("os.startfile", lambda p: opened.append(p))
+
+    rep1 = open_folder("models")
+    assert "models" in rep1.lower()
+    assert len(opened) == 1
+
+    rep2 = open_folder("nonexistent_random_directory_xyz")
+    assert "not found" in rep2.lower()
+
+    rep3 = search_files("moonshine")
+    assert "found" in rep3.lower()
+
+
+def test_local_brain_tool_parsing_and_execution(monkeypatch):
+    from local_brain import parse_and_execute_local_action, execute_local_turn
+
+    opened = []
+    monkeypatch.setattr("os.startfile", lambda p: opened.append(p))
+
+    t_res, sp = parse_and_execute_local_action('TOOL_CALL: open_folder({"target": "models"})\nOpening models for you, Fas.')
+    assert "models" in t_res.lower()
+    assert "Opening models for you, Fas." in sp
+
+    t_res2, sp2 = parse_and_execute_local_action('TOOL_CALL: set_volume({"level": 60})\nVolume adjusted to 60%, Fas.')
+    assert "Volume adjusted to 60%, Fas." in sp2
+
+    monkeypatch.setattr("local_brain.query_local_brain", lambda p, u, h=None: 'TOOL_CALL: open_folder({"target": "models"})\nOpened models folder, Fas.')
+    turn_res = execute_local_turn("open models folder")
+    assert "Opened models folder" in turn_res
+
+

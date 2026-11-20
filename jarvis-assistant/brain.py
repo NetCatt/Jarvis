@@ -63,6 +63,8 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "write_agent_plan": "Write implementation plan for agent steps.",
         "dispatch_coding_agent": "Dispatch an external coding agent to implement code.",
         "open_app": "Launch a desktop application.",
+        "open_folder": "Open a folder or directory in Windows Explorer (e.g. models, downloads, desktop, code, or path).",
+        "search_files": "Search for files by name or keyword across workspace or directories.",
         "open_browser": "Open a URL in the browser.",
         "search_google": "Search Google in the browser.",
         "play_music": "Play music or song.",
@@ -70,6 +72,7 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "play_spotify": "Play track or artist on Spotify.",
         "get_volume": "Get current master audio volume percentage.",
         "set_volume": "Set master audio volume level percentage (0 to 100).",
+        "change_volume": "Adjust system audio volume by delta (e.g. +10 or -10 percent).",
     }
     for fn in tool_functions:
         sig = inspect.signature(fn)
@@ -109,6 +112,9 @@ def _call_gemini_rest(contents: list, system_instruction: str = None, tools: lis
     timeout_sec = float(os.getenv("GEMINI_TIMEOUT_SEC", "3.5"))
     with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+_ORIG_CALL_GEMINI_REST = _call_gemini_rest
 
 
 def _build_system_prompt(session_id: str, user_text: str) -> str:
@@ -168,6 +174,14 @@ def _try_fast_action(user_text: str) -> str | None:
     if any(k in low for k in ("what is the volume", "what's the volume", "current volume", "check volume", "check the volume")):
         from tools.media import get_volume
         return get_volume()
+    if low.startswith("open folder ") or low.startswith("open directory ") or low.startswith("open the folder "):
+        from tools.apps import open_folder
+        target = re.sub(r"^(open folder|open directory|open the folder)\s*", "", low).strip("?.! ")
+        return open_folder(target)
+    if low.startswith("search files for ") or low.startswith("find files with ") or low.startswith("search files "):
+        from tools.apps import search_files
+        query = re.sub(r"^(search files for|find files with|search files)\s*", "", low).strip("?.! ")
+        return search_files(query)
     if any(k in low for k in ("open youtube", "turn on youtube", "launch youtube", "play youtube", "open a song on youtube")):
         from tools.media import open_browser
         open_browser("https://www.youtube.com")
@@ -258,6 +272,21 @@ def converse(session_id: str, user_text: str) -> str:
         append_turn(session_id, "mike", reply, None)
         return reply
 
+    local_first = os.getenv("LOCAL_BRAIN_FIRST", "true").lower() in ("true", "1", "yes")
+    if local_first and _call_gemini_rest == _ORIG_CALL_GEMINI_REST:
+        try:
+            from local_brain import execute_local_turn
+            local_reply = execute_local_turn(user_text, history)
+            if local_reply:
+                reply = _sanitize_spoken_reply(local_reply)
+                append_turn(session_id, "user", user_text, embed(user_text))
+                append_turn(session_id, "mike", reply, embed(reply))
+                threading.Thread(target=_extract_state_update, args=(session_id, user_text, reply), daemon=True).start()
+                _maybe_run_memory_upkeep(session_id)
+                return reply
+        except Exception:
+            pass
+
     rest_contents = []
     for h in history:
         rest_contents.append({"role": ("user" if h["role"] == "user" else "model"), "parts": [{"text": h["text"]}]})
@@ -289,9 +318,8 @@ def converse(session_id: str, user_text: str) -> str:
                 break
         if not resp_dict or not resp_dict.get("candidates"):
             try:
-                from local_brain import query_local_brain
-                local_prompt = "You are Mike Ross, Fas's technical lead and confidant from Suits. Sharp, loyal, concise. Always address the user as Fas. Respond in 1-2 spoken sentences."
-                local_reply = query_local_brain(local_prompt, user_text, history)
+                from local_brain import execute_local_turn
+                local_reply = execute_local_turn(user_text, history)
                 if local_reply:
                     reply = _sanitize_spoken_reply(local_reply)
                     break

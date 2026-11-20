@@ -1,11 +1,32 @@
 import atexit
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.request
 
 _SERVER_PROC = None
+
+LOCAL_SYSTEM_PROMPT = (
+    "You are Mike Ross, Fas's technical lead, confidant, and desktop orchestrator from Suits. "
+    "Sharp, loyal, concise. Always address the user as Fas. Speak concisely in 1-2 spoken sentences.\n"
+    "When Fas asks to perform system actions, you MUST emit a tool call on its own line:\n"
+    "TOOL_CALL: tool_name({\"param\": \"value\"})\n"
+    "Available tools:\n"
+    "- set_volume({\"level\": int})  (0 to 100)\n"
+    "- change_volume({\"delta\": int})  (+10 or -10)\n"
+    "- get_volume({})\n"
+    "- open_folder({\"target\": str})  ('downloads', 'models', 'desktop', 'code', or path)\n"
+    "- search_files({\"query\": str})\n"
+    "- open_app({\"app_name\": str})\n"
+    "- open_browser({\"url\": str})\n"
+    "- search_google({\"query\": str})\n"
+    "- play_music({\"song\": str, \"platform\": str})\n"
+    "- list_agenda({\"when\": 'today'|'all'})\n"
+    "- add_task({\"title\": str})\n"
+    "After emitting TOOL_CALL if needed, respond naturally to Fas. If no tool is needed, converse normally."
+)
 
 
 def get_server_port() -> int:
@@ -107,3 +128,58 @@ def query_local_brain(system_prompt: str, user_text: str, history: list = None) 
             return data["choices"][0]["message"]["content"].strip().replace("*", "")
     except Exception:
         return None
+
+
+def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
+    action_match = re.search(r"(?:ACTION|TOOL_CALL|TOOL):\s*([a-zA-Z0-9_]+)\s*\((.*?)\)", text, re.DOTALL)
+    if not action_match:
+        json_match = re.search(r"\{\s*\"(?:action|tool)\"\s*:\s*\"([a-zA-Z0-9_]+)\"\s*,\s*\"(?:args|parameters)\"\s*:\s*(\{.*?\})\s*\}", text, re.DOTALL)
+        if json_match:
+            call_name = json_match.group(1)
+            raw_args = json_match.group(2)
+            try:
+                args = json.loads(raw_args)
+            except Exception:
+                args = {}
+            from tools import TOOL_MAP
+            fn = TOOL_MAP.get(call_name)
+            tool_res = str(fn(**args)) if fn else None
+            spoken = text[:json_match.start()] + text[json_match.end():]
+            spoken = re.sub(r"^\s*Spoken:\s*", "", spoken.strip(), flags=re.IGNORECASE)
+            return tool_res, spoken or (tool_res or "")
+        return None, text
+
+    call_name = action_match.group(1)
+    raw_args = action_match.group(2).strip()
+    args = {}
+    if raw_args:
+        try:
+            args = json.loads(raw_args)
+        except Exception:
+            for kv in re.finditer(r"([a-zA-Z0-9_]+)\s*=\s*['\"]?(.*?)['\"]?(?:,|$)", raw_args):
+                args[kv.group(1)] = kv.group(2).strip("'\"")
+            if not args and "=" not in raw_args and raw_args.strip("'\""):
+                args = {"target": raw_args.strip("'\"")}
+    from tools import TOOL_MAP
+    fn = TOOL_MAP.get(call_name)
+    tool_res = None
+    if fn:
+        try:
+            tool_res = str(fn(**args))
+        except Exception as exc:
+            tool_res = f"Action error: {exc}"
+    spoken = text[:action_match.start()] + text[action_match.end():]
+    spoken = re.sub(r"^\s*Spoken:\s*", "", spoken.strip(), flags=re.IGNORECASE)
+    return tool_res, spoken or (tool_res or "")
+
+
+def execute_local_turn(user_text: str, history: list = None) -> str | None:
+    raw = query_local_brain(LOCAL_SYSTEM_PROMPT, user_text, history)
+    if not raw:
+        return None
+    tool_res, spoken = parse_and_execute_local_action(raw)
+    if spoken and len(spoken.strip()) > 3:
+        return spoken.strip()
+    if tool_res:
+        return tool_res.strip()
+    return raw.strip()
