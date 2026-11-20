@@ -247,7 +247,8 @@ def converse(session_id: str, user_text: str) -> str:
         if not resp_dict or not resp_dict.get("candidates"):
             try:
                 from local_brain import query_local_brain
-                local_reply = query_local_brain(system_prompt, user_text, history)
+                local_prompt = "You are Mike Ross, Fas's technical lead and confidant from Suits. Sharp, loyal, concise. Always address the user as Fas. Respond in 1-2 spoken sentences."
+                local_reply = query_local_brain(local_prompt, user_text, history)
                 if local_reply:
                     reply = local_reply
                     break

@@ -74,6 +74,6 @@ class DynamicVoiceEndpoint:
             self.silence_ms = 0
         else:
             self.silence_ms += self.frame_ms
-        if self.silence_ms >= threshold_ms or (words and self.stagnant_ms >= threshold_ms + 400):
+        if self.silence_ms >= threshold_ms or (words and smoothed_speech and self.stagnant_ms >= threshold_ms + 600):
             return smoothed_speech, True
         return smoothed_speech, False

@@ -2,6 +2,15 @@ import json
 import os
 import sys
 
+def _read_exact(stream, n):
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            return bytes(buf) if buf else None
+        buf.extend(chunk)
+    return bytes(buf)
+
 def main():
     try:
         import numpy as np
@@ -31,6 +40,15 @@ def main():
         sample_rate = int(os.getenv("MOONSHINE_SAMPLE_RATE", "16000"))
         update_interval = float(os.getenv("MOONSHINE_UPDATE_INTERVAL", "0.35"))
         transcriber = Transcriber(model_path, model_arch=ModelArch.MEDIUM_STREAMING, update_interval=update_interval)
+        try:
+            transcriber.set_keyterms([
+                "Fas", "Faas", "Mike", "Ross", "agenda", "Daily Agenda", "project", "repo",
+                "subproject", "task", "list", "Redis", "caching", "standby", "tag", "flag",
+                "isolate", "code", "branch", "git", "status", "tests", "benchmark", "folder",
+                "browser", "YouTube", "Spotify", "upcoming", "neither"
+            ])
+        except Exception:
+            pass
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.stderr.flush()
@@ -70,7 +88,7 @@ def main():
 
     stdin = sys.stdin.buffer
     while True:
-        chunk = stdin.read(640)
+        chunk = _read_exact(stdin, 640)
         if not chunk:
             break
         if chunk.startswith(b"CMD:RESET"):
