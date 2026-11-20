@@ -1,38 +1,50 @@
 # Jarvis: Voice-First AI Project Lead & Desktop Orchestrator
 
-Ultra-lightweight (< 45 MB RSS) AI assistant and technical project lead with a **Mike Ross** persona. Bridges live voice, local system orchestration, autonomous coding agent loops, and Google Tasks sync with zero cloud downtime.
-
----
-
-## Key Features
-
-- **Sub-50ms Fast-Path**: Instant deterministic execution for apps, media, web, and task mutations without LLM token burn.
-- **Hybrid Brain**: Primary fast cloud inference (`gemini-flash-lite-latest` ~0.99s) with automatic failover to local offline SLM (`Qwen2.5-1.5B-Instruct` via `llama-server.exe`).
-- **Edge Speech-to-Text**: Low-latency Moonshine v2 Medium streaming with domain vocabulary conditioning and syntax-aware VAD hangover.
-- **Dual Voice Synthesis**: High-fidelity online Fish Audio streaming clone paired with local offline Kokoro-82M neural TTS (`ross.pt` voice tensor).
-- **Automated Lead Sync**: Reconciles Git commits with Google Tasks, tracking progress and updating `NEXT_PLAN.md` across sessions.
-- **Zero-Model FTS5 Memory**: 4-tier persistent state, facts, and episodic conversation recall within a strict hardware budget.
+Ultra-lightweight (< 45 MB host RSS) AI project lead and desktop orchestrator with a **Mike Ross** persona. Engineered for dual-core hardware with zero cloud downtime, bridging live streaming voice, native OS control, autonomous coding loops, and Google Tasks sync.
 
 ---
 
 ## Architecture
 
 ```
-[Microphone] ──► Silero/WebRTC VAD ──► Moonshine v2 STT
-                                             │
-                                             ▼
-                                     [Brain Router]
-                    ┌────────────────────────┼────────────────────────┐
-                    ▼                        ▼                        ▼
-           Tier 1: Fast Action      Tier 2: Cloud LLM        Tier 3: Local SLM
-             (Sub-50ms Native)     (Gemini Flash Lite 0.99s)   (Qwen2.5-1.5B Offline)
-                    │                        │                        │
-                    └────────────────────────┼────────────────────────┘
-                                             ▼
-                                  [TTS Engine Dispatch]
-                                     ├─► Fish Audio (Cloud Stream)
-                                     └─► Kokoro-82M (Local ross.pt)
+[Microphone]
+     │
+     ▼
+[Dynamic VAD] ────────► [Streaming STT (Moonshine v2)]
+(Context hangover,       (640-byte exact pipe, domain keyterms,
+ anti-freeze guard)       live token preview)
+                             │
+                             ▼
+                    [Brain Router]
+     ┌───────────────────────┼───────────────────────┐
+     ▼                       ▼                       ▼
+Tier 1: Fast Action     Tier 2: Cloud LLM       Tier 3: Local SLM
+ (Sub-10ms Native)     (Gemini Flash Lite 0.99s) (Qwen2.5-1.5B Offline)
+ • Win32 Master Vol     • Spoken Sanitizer      • 100% Air-Gapped Fallback
+ • Apps & Browser       • Tool Dispatching      • llama-server Runner
+ • Google Tasks CRUD    • 3.5s Timeout Guard
+ • Media & Search
+     │                       │                       │
+     └───────────────────────┼───────────────────────┘
+                             │
+                             ▼
+                 [TTS Engine Dispatch]
+             ├─► Kokoro-82M (Local ross.pt Voice Tensor)
+             └─► Fish Audio (Cloud Low-Latency Stream)
 ```
+
+---
+
+## Core Capabilities
+
+- **Sub-10ms Fast Actions**: Deterministic regex-routed system control (Windows CoreAudio master volume, application launching, web queries, task management) with zero LLM latency and zero token burn.
+- **Spoken Output Sanitizer**: Delineates direct conversational speech from internal state/directives, eliminating prompt context and memory leaks.
+- **Hybrid Brain with SLM Failover**: Primary cloud routing (`gemini-flash-lite-latest` ~0.99s) backed by offline quantized `Qwen2.5-1.5B-Instruct` served locally via embedded `llama-server`.
+- **Edge Speech Recognition**: Streaming Moonshine v2 Medium over decoupled Windows IPC pipes, aligned to exact 640-byte PCM boundaries with domain keyterm biasing.
+- **Context-Adaptive VAD**: Adaptive speech endpointing scaling from 600ms to 1400ms across short utterances and conjunction clauses, with stagnant text freeze detection.
+- **Dual Neural TTS**: Offline low-latency Kokoro-82M audio chunk streaming using custom Mike Ross voice embeddings (`ross.pt`), paired with online Fish Audio streaming.
+- **Zero-Model FTS5 Memory**: 4-tier persistent state, active personality directives, decayed facts, and BM25 conversation recall within a strict SQLite footprint.
+- **Autonomous Lead Sync**: Reconciles git commits against Google Tasks, tracks blocker notes, and generates `NEXT_PLAN.md` across coding sessions.
 
 ---
 
@@ -50,9 +62,8 @@ cp .env.example .env
 ```ini
 GEMINI_API_KEY=your_gemini_key
 GEMINI_MODEL=gemini-flash-lite-latest
-TTS_ENGINE=fish_audio          # or 'kokoro' for 100% offline TTS
-FISH_AUDIO_KEY=your_fish_key
-FISH_AUDIO_MODEL_ID=your_model_id
+TTS_ENGINE=kokoro              # 'kokoro' (offline neural) or 'fish_audio' (cloud)
+LOCAL_BRAIN_PORT=8088          # Local Qwen2.5 server port
 ```
 
 ### 3. Setup Local Brain & Models (Optional Offline Fallback)
@@ -64,7 +75,8 @@ python scripts/setup_local_brain.py
 - **Interactive Voice Loop**:
   ```bash
   python main.py
-  # Toggle Active/Standby with F9
+  # Press F9 to toggle Active / Standby
+  # Press Ctrl+C to quit
   ```
 - **CLI Commands**:
   ```bash
@@ -74,20 +86,21 @@ python scripts/setup_local_brain.py
 
 ---
 
-## Autonomous Agent Hook
+## Project Lead Sync Hook
 
-Add to your project's `AGENTS.md` or `CLAUDE.md`:
+Integrate with your coding agent (`AGENTS.md` / `CLAUDE.md` / git hooks):
 
 ```bash
-python "/path/to/jarvis-assistant/jarvis_cli.py" --agent-report "<1-sentence summary of changes>" --repo "."
+python "d:/path/to/jarvis-assistant/jarvis_cli.py" --agent-report "<1-sentence summary of completed milestone>" --repo "."
 ```
-Reconciles completed code changes with Google Tasks ("Daily Agenda"), checks off finished items, and generates `NEXT_PLAN.md` for the next session.
+
+Automatically reconciles repository commits with Google Tasks ("Daily Agenda"), checks off finished items, appends progress notes, and updates `NEXT_PLAN.md`.
 
 ---
 
 ## Verification & Benchmarks
 
 ```bash
-python -m pytest tests          # 75/75 passing
-python benchmark_synthetic.py   # Hardware RSS < 45.0 MB verified
+python -m pytest tests          # 77/77 passing
+python benchmark_synthetic.py   # Active RSS < 45.0 MB (39.9 MB measured)
 ```
