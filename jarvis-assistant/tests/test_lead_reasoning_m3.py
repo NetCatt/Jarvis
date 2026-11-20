@@ -311,8 +311,10 @@ def test_zero_comments_and_docstrings_in_all_m3_files():
         os.path.join(repo_dir, "tools", "dispatch.py"),
         os.path.join(repo_dir, "brain.py"),
         os.path.join(repo_dir, "main.py"),
+        os.path.join(repo_dir, "tools", "media.py"),
         os.path.join(repo_dir, "audio", "tts.py"),
         os.path.join(repo_dir, "tests", "test_lead_reasoning_m3.py"),
+        os.path.join(repo_dir, "tests", "test_tier1_features.py"),
     ]
 
     for file_path in target_files:

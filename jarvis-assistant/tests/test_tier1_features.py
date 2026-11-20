@@ -132,3 +132,58 @@ assert rss < 45.0, f'RSS exceeded: {rss}'
     proc = subprocess.run([sys.executable, "-c", script], cwd=repo_dir, capture_output=True, text=True)
     assert proc.returncode == 0, f"Error: {proc.stderr}"
     assert "RSS:" in proc.stdout
+
+
+def test_system_volume_control_and_fast_actions(monkeypatch):
+    from brain import _try_fast_action
+    from tools.media import get_volume, set_volume, change_volume
+
+    monkeypatch.setattr("tools.media._get_endpoint_volume", lambda: None)
+    assert "unavailable" in get_volume().lower()
+    assert "unavailable" in set_volume(50).lower()
+    assert "unavailable" in change_volume(10).lower()
+
+    fake_state = {"vol": 0.24}
+
+    def fake_get_volume():
+        pct = int(round(fake_state["vol"] * 100))
+        return f"Current master volume is at {pct}%."
+
+    def fake_set_volume(level):
+        fake_state["vol"] = int(level) / 100.0
+        return f"Master volume set to {level}%, Fas."
+
+    def fake_change_volume(delta=10):
+        fake_state["vol"] = max(0.0, min(1.0, fake_state["vol"] + delta / 100.0))
+        pct = int(round(fake_state["vol"] * 100))
+        return f"Adjusted volume to {pct}%, Fas."
+
+    monkeypatch.setattr("tools.media.get_volume", fake_get_volume)
+    monkeypatch.setattr("tools.media.set_volume", fake_set_volume)
+    monkeypatch.setattr("tools.media.change_volume", fake_change_volume)
+
+    rep1 = _try_fast_action("turn up the volume to 50%")
+    assert "50%" in rep1
+
+    rep2 = _try_fast_action("volume down")
+    assert "Adjusted volume" in rep2
+
+    rep3 = _try_fast_action("what's the volume")
+    assert "Current master volume" in rep3
+
+
+def test_sanitize_spoken_reply_strips_hallucinated_facts():
+    from brain import _sanitize_spoken_reply
+
+    leaked = (
+        "Volume is cranked to 50 percent, Fas, let's keep riding this momentum.\n"
+        'Mike refers to the user as "Fas."\n'
+        "The user and Mike are currently working on a Redis caching optimization project.\n"
+        "Accountability is maintained on agenda lists by tagging people or project mates next to to-do items."
+    )
+    cleaned = _sanitize_spoken_reply(leaked)
+    assert "Volume is cranked to 50 percent, Fas" in cleaned
+    assert "Mike refers to" not in cleaned
+    assert "The user and Mike" not in cleaned
+    assert "Accountability is" not in cleaned
+

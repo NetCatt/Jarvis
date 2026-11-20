@@ -68,6 +68,8 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "play_music": "Play music or song.",
         "play_youtube": "Play video or music on YouTube.",
         "play_spotify": "Play track or artist on Spotify.",
+        "get_volume": "Get current master audio volume percentage.",
+        "set_volume": "Set master audio volume level percentage (0 to 100).",
     }
     for fn in tool_functions:
         sig = inspect.signature(fn)
@@ -152,6 +154,20 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
 
 def _try_fast_action(user_text: str) -> str | None:
     low = user_text.lower().strip()
+    vol_match = re.search(r"(?:turn\s+(?:up\s+|down\s+)?|set\s+|put\s+)?(?:the\s+)?volume\s+(?:to\s+|up\s+to\s+|at\s+)?(\d{1,3})\s*(?:%|percent)?", low)
+    if vol_match and any(k in low for k in ("volume", "vol")):
+        from tools.media import set_volume
+        lvl = int(vol_match.group(1))
+        return set_volume(lvl)
+    if any(k in low for k in ("volume up", "turn up the volume", "turn up volume", "crank up the volume", "increase volume", "louder")):
+        from tools.media import change_volume
+        return change_volume(10)
+    if any(k in low for k in ("volume down", "turn down the volume", "turn down volume", "decrease volume", "lower the volume", "softer", "quieter")):
+        from tools.media import change_volume
+        return change_volume(-10)
+    if any(k in low for k in ("what is the volume", "what's the volume", "current volume", "check volume", "check the volume")):
+        from tools.media import get_volume
+        return get_volume()
     if any(k in low for k in ("open youtube", "turn on youtube", "launch youtube", "play youtube", "open a song on youtube")):
         from tools.media import open_browser
         open_browser("https://www.youtube.com")
@@ -190,6 +206,32 @@ def _try_fast_action(user_text: str) -> str | None:
     return None
 
 
+def _sanitize_spoken_reply(raw_text: str) -> str:
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    if not lines:
+        return "Done."
+    filtered = []
+    for line in lines:
+        low = line.lower()
+        if any(low.startswith(p) for p in (
+            "mike refers to",
+            "the user and mike",
+            "accountability is",
+            "known about",
+            "relevant past context",
+            "current working state",
+            "evolving personality",
+            "open project tasks",
+            "notes:",
+            "[project lead directive]",
+            "spoken output directive",
+        )):
+            continue
+        filtered.append(line)
+    text = " ".join(filtered).strip().replace("*", "")
+    return text or "Done."
+
+
 def converse(session_id: str, user_text: str) -> str:
     fast_reply = _try_fast_action(user_text)
     if fast_reply:
@@ -211,6 +253,7 @@ def converse(session_id: str, user_text: str) -> str:
         cfg = types.SimpleNamespace(system_instruction=system_prompt, tools=TOOL_FUNCTIONS)
         resp = client.models.generate_content(model=_models()[0], contents=mock_contents, config=cfg)
         reply = (getattr(resp, "text", "") or "Done.").strip().replace("*", "")
+        reply = _sanitize_spoken_reply(reply)
         append_turn(session_id, "user", user_text, None)
         append_turn(session_id, "mike", reply, None)
         return reply
@@ -250,7 +293,7 @@ def converse(session_id: str, user_text: str) -> str:
                 local_prompt = "You are Mike Ross, Fas's technical lead and confidant from Suits. Sharp, loyal, concise. Always address the user as Fas. Respond in 1-2 spoken sentences."
                 local_reply = query_local_brain(local_prompt, user_text, history)
                 if local_reply:
-                    reply = local_reply
+                    reply = _sanitize_spoken_reply(local_reply)
                     break
             except Exception:
                 pass
@@ -285,7 +328,7 @@ def converse(session_id: str, user_text: str) -> str:
                 })
                 continue
             break
-        reply = "".join(text_parts).strip().replace("*", "")
+        reply = _sanitize_spoken_reply("".join(text_parts))
         break
 
     is_simple_fast_path = steps_taken >= 1 and not chained
