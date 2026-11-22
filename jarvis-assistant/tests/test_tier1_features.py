@@ -261,4 +261,31 @@ def test_tasks_context_completed_items(monkeypatch):
     assert "Task 1" in agenda_comp
 
 
+def test_media_playback_controls(monkeypatch):
+    from tools.media import next_track, pause_music, prev_track
+    from brain import _is_system_intent, _try_fast_action
+    from local_brain import parse_and_execute_local_action
+
+    monkeypatch.setattr("ctypes.windll.user32.keybd_event", lambda *args: None)
+
+    res_pause = pause_music()
+    assert "playback" in res_pause.lower()
+
+    res_next = next_track()
+    assert "next track" in res_next.lower()
+
+    res_prev = prev_track()
+    assert "previous track" in res_prev.lower()
+
+    assert _is_system_intent("pause my music")
+    assert _is_system_intent("skip to next track")
+
+    fast_pause = _try_fast_action("pause my music")
+    assert fast_pause and "playback" in fast_pause.lower()
+
+    tool_res, spoken = parse_and_execute_local_action('TOOL_CALL: pause_music({})\nI paused the music for you, Fas.')
+    assert "playback" in str(tool_res).lower()
+    assert "paused the music" in spoken.lower()
+
+
 

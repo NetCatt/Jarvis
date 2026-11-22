@@ -157,3 +157,27 @@ def play_music(song: str = "", platform: str = "") -> str:
         return play_youtube(target_song)
     _LAST_SONG = target_song
     return f"Would you like to play {target_song} on Spotify or YouTube, Fas?"
+
+
+def pause_music() -> str:
+    if os.name == "nt":
+        ctypes.windll.user32.keybd_event(0xB3, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0xB3, 0, 2, 0)
+        return "Toggled playback, Fas."
+    return "Media control unavailable."
+
+
+def next_track() -> str:
+    if os.name == "nt":
+        ctypes.windll.user32.keybd_event(0xB0, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0xB0, 0, 2, 0)
+        return "Skipped to next track, Fas."
+    return "Media control unavailable."
+
+
+def prev_track() -> str:
+    if os.name == "nt":
+        ctypes.windll.user32.keybd_event(0xB1, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0xB1, 0, 2, 0)
+        return "Playing previous track, Fas."
+    return "Media control unavailable."

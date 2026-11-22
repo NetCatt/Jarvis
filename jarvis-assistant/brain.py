@@ -70,6 +70,9 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "play_music": "Play music or song.",
         "play_youtube": "Play video or music on YouTube.",
         "play_spotify": "Play track or artist on Spotify.",
+        "pause_music": "Pause, resume, or toggle music or media playback.",
+        "next_track": "Skip to the next music or media track.",
+        "prev_track": "Skip to the previous music or media track.",
         "get_volume": "Get current master audio volume percentage.",
         "set_volume": "Set master audio volume level percentage (0 to 100).",
         "change_volume": "Adjust system audio volume by delta (e.g. +10 or -10 percent).",
@@ -195,6 +198,15 @@ def _try_fast_action(user_text: str) -> str | None:
         cleaned = re.sub(r"^(can you\s+)?(open\s+a\s+song(\s+for\s+me)?|play\s+a\s+song(\s+for\s+me)?|play\s+music|play)\s*", "", low).strip("?.! ")
         play_music(cleaned or "lofi beats")
         return f"Playing {cleaned or 'music'} for you now, Fas."
+    if any(k in low for k in ("pause music", "pause the music", "stop the music", "stop music", "resume music", "resume the music", "toggle music", "pause playback", "pause my music", "stop playback")):
+        from tools.media import pause_music
+        return pause_music()
+    if any(k in low for k in ("next track", "next song", "skip song", "skip track", "skip this song")):
+        from tools.media import next_track
+        return next_track()
+    if any(k in low for k in ("previous track", "previous song", "prev track", "last track")):
+        from tools.media import prev_track
+        return prev_track()
     if any(k in low for k in ("what is on my agenda", "what's on my agenda", "my agenda", "today's agenda", "list tasks", "what do i have today")):
         from tools.tasks import list_agenda
         return list_agenda(when="today")
@@ -231,6 +243,7 @@ def _is_system_intent(text: str) -> bool:
         "search file", "find file", "look for file", "search for file",
         "open app", "launch app", "open application",
         "browser", "youtube", "spotify", "play music", "play song",
+        "pause", "resume", "stop music", "next track", "prev track", "skip track", "skip song",
         "open vscode", "open terminal", "open chrome"
     )
     return any(k in low for k in system_keywords)

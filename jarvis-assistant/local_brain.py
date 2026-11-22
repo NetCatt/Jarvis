@@ -26,6 +26,9 @@ LOCAL_SYSTEM_PROMPT = (
     "- open_browser({\"url\": str})\n"
     "- search_google({\"query\": str})\n"
     "- play_music({\"song\": str, \"platform\": str})\n"
+    "- pause_music({})\n"
+    "- next_track({})\n"
+    "- prev_track({})\n"
     "- list_agenda({\"when\": 'today'|'all'|'completed'})\n"
     "- add_task({\"title\": str})\n"
     "After emitting TOOL_CALL if needed, respond naturally to Fas. If no tool is needed, converse normally."
@@ -177,7 +180,7 @@ def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
 
 
 def execute_local_turn(user_text: str, history: list = None, system_prompt: str = None) -> str | None:
-    prompt = system_prompt if system_prompt else LOCAL_SYSTEM_PROMPT
+    prompt = f"{system_prompt}\n\n{LOCAL_SYSTEM_PROMPT}" if system_prompt else LOCAL_SYSTEM_PROMPT
     raw = query_local_brain(prompt, user_text, history)
     if not raw:
         return None

@@ -46,7 +46,8 @@ def main():
                 "subproject", "task", "tasks", "list", "Redis", "caching", "standby", "tag", "flag",
                 "isolate", "code", "branch", "git", "status", "tests", "benchmark", "folder",
                 "browser", "YouTube", "Spotify", "upcoming", "neither", "progress", "extension",
-                "complete", "completed", "due", "context", "today", "volume", "percent", "downloads", "search"
+                "complete", "completed", "due", "context", "today", "volume", "percent", "downloads", "search",
+                "pause", "resume", "music", "play", "track", "skip", "song", "stop"
             ])
         except Exception:
             pass

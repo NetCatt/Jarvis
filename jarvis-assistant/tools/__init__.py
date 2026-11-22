@@ -1,7 +1,7 @@
 from tools.apps import open_app, open_folder, search_files
 from tools.dev_sync import sync_coding_progress
 from tools.dispatch import dispatch_coding_agent
-from tools.media import change_volume, get_volume, open_browser, play_music, play_spotify, play_youtube, search_google, set_volume
+from tools.media import change_volume, get_volume, next_track, open_browser, pause_music, play_music, play_spotify, play_youtube, prev_track, search_google, set_volume
 from tools.planner import write_agent_plan
 from tools.tasks import add_task, complete_task, create_task_list, list_agenda, list_task_lists, update_task_progress
 
@@ -23,6 +23,9 @@ TOOL_FUNCTIONS = [
     play_music,
     play_youtube,
     play_spotify,
+    pause_music,
+    next_track,
+    prev_track,
     get_volume,
     set_volume,
     change_volume,
