@@ -196,8 +196,7 @@ def _try_fast_action(user_text: str) -> str | None:
     if "open a song" in low or "play a song" in low or "play music" in low or low.startswith("play "):
         from tools.media import play_music
         cleaned = re.sub(r"^(can you\s+)?(open\s+a\s+song(\s+for\s+me)?|play\s+a\s+song(\s+for\s+me)?|play\s+music|play)\s*", "", low).strip("?.! ")
-        play_music(cleaned or "lofi beats")
-        return f"Playing {cleaned or 'music'} for you now, Fas."
+        return play_music(cleaned or "lofi beats")
     if any(k in low for k in ("pause music", "pause the music", "stop the music", "stop music", "resume music", "resume the music", "toggle music", "pause playback", "pause my music", "stop playback")):
         from tools.media import pause_music
         return pause_music()

@@ -1,5 +1,6 @@
 import ctypes
 import os
+import re
 import urllib.parse
 import webbrowser
 from ctypes import HRESULT, POINTER, c_float, c_uint32, c_void_p, cast, byref
@@ -146,17 +147,20 @@ def play_spotify(query: str) -> str:
 
 
 def play_music(song: str = "", platform: str = "") -> str:
-    global _LAST_SONG
-    target_song = song.strip() or _LAST_SONG or "music"
+    target_song = song.strip() or "music"
     p = platform.lower().strip()
+    if not p:
+        if "spotify" in target_song.lower():
+            target_song = re.sub(r"\b(on|in)\s+spotify\b", "", target_song, flags=re.IGNORECASE).strip()
+            p = "spotify"
+        elif "youtube" in target_song.lower():
+            target_song = re.sub(r"\b(on|in)\s+youtube\b", "", target_song, flags=re.IGNORECASE).strip()
+            p = "youtube"
+        else:
+            p = os.getenv("DEFAULT_MUSIC_PLATFORM", "youtube").lower()
     if "spotify" in p:
-        _LAST_SONG = ""
         return play_spotify(target_song)
-    if "youtube" in p:
-        _LAST_SONG = ""
-        return play_youtube(target_song)
-    _LAST_SONG = target_song
-    return f"Would you like to play {target_song} on Spotify or YouTube, Fas?"
+    return play_youtube(target_song)
 
 
 def pause_music() -> str:

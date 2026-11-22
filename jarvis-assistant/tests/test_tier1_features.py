@@ -283,9 +283,20 @@ def test_media_playback_controls(monkeypatch):
     fast_pause = _try_fast_action("pause my music")
     assert fast_pause and "playback" in fast_pause.lower()
 
+    monkeypatch.setattr("webbrowser.open", lambda *args, **kwargs: True)
+    from tools.media import play_music
+    res_music = play_music("metallica")
+    assert "metallica on youtube" in res_music.lower()
+
+    fast_play = _try_fast_action("Play Metallica.")
+    assert fast_play and "metallica on youtube" in fast_play.lower()
+
     tool_res, spoken = parse_and_execute_local_action('TOOL_CALL: pause_music({})\nI paused the music for you, Fas.')
     assert "playback" in str(tool_res).lower()
     assert "paused the music" in spoken.lower()
+
+    tool_res_play, _ = parse_and_execute_local_action('TOOL_CALL: play_music({"song": "metallica"})\nPlaying metallica.')
+    assert "metallica on youtube" in str(tool_res_play).lower()
 
 
 
