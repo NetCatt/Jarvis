@@ -22,15 +22,14 @@ IS_ACTIVE = True
 _LAST_REPLY_TIME = 0.0
 
 
-def _handle_speech_turn(transcriber: StreamingTranscriber, transcript: str, session_id: str, endpoint: DynamicVoiceEndpoint = None) -> None:
+def _handle_speech_turn(transcript: str, session_id: str, endpoint: DynamicVoiceEndpoint = None) -> None:
     global _LAST_REPLY_TIME, IS_ACTIVE
     clean_text = transcript.strip()
     if endpoint:
         clean_text = endpoint.strip_stop_phrase(clean_text).strip()
     if not clean_text:
         return
-    if "standby" in clean_text.lower():
-        IS_ACTIVE = False; speak("Entering standby mode, Fas."); return
+    if "standby" in clean_text.lower(): IS_ACTIVE = False; speak("Entering standby mode, Fas."); return
     has_wake = check_wake_phrase(clean_text)
     grace_sec = float(os.getenv("WAKE_GRACE_SEC", "30"))
     in_grace = (time.time() - _LAST_REPLY_TIME) < grace_sec
@@ -61,9 +60,10 @@ def run_orchestrator() -> None:
     speak(greeting); _LAST_REPLY_TIME = time.time()
 
     transcriber = StreamingTranscriber()
-    endpoint = DynamicVoiceEndpoint(vad_mode=int(os.getenv("VAD_MODE", "2")))
+    endpoint = DynamicVoiceEndpoint(vad_mode=int(os.getenv("VAD_MODE", "1")))
     transcriber.start()
-    last_rendered, was_triggered, preroll = "", False, collections.deque(maxlen=15)
+    preroll = collections.deque(maxlen=20)
+    was_triggered, partial_text = False, ""
 
     try:
         import sounddevice as sd
@@ -77,24 +77,27 @@ def run_orchestrator() -> None:
                 if not IS_ACTIVE:
                     time.sleep(0.02); continue
                 pcm_bytes = pcm_data.tobytes()
-                is_speech, is_endpoint = endpoint.process_frame(pcm_bytes, last_rendered)
+                is_speech, is_endpoint = endpoint.process_frame(pcm_bytes, partial_text)
                 if endpoint.triggered:
                     if not was_triggered:
                         was_triggered = True
-                        for f in preroll: transcriber.feed_pcm(f)
+                        for f in preroll:
+                            transcriber.feed_pcm(f)
                         preroll.clear()
-                    partial_text, is_final = transcriber.feed_pcm(pcm_bytes)
-                    if partial_text and partial_text != last_rendered:
-                        render_live_token(partial_text); last_rendered = partial_text
+                    partial_text, _ = transcriber.feed_pcm(pcm_bytes)
+                    if partial_text:
+                        render_live_token(partial_text)
                 else:
-                    preroll.append(pcm_bytes); partial_text = ""; was_triggered = False
-                if is_endpoint and (partial_text or last_rendered):
-                    final_text = (transcriber.get_final() or partial_text or last_rendered).strip()
-                    if final_text.lower().strip(".,!?") in ("um", "uh", "er", "ah", "hmm", "umm", "uhh"):
+                    preroll.append(pcm_bytes)
+                    was_triggered = False
+                if is_endpoint:
+                    final_text = (transcriber.get_transcript() or partial_text).strip()
+                    partial_text = ""
+                    if not final_text or final_text.lower().strip(".,!?") in ("um", "uh", "er", "ah", "hmm", "umm", "uhh"):
                         endpoint.reset(); transcriber.reset(); preroll.clear(); was_triggered = False; continue
-                    sys.stdout.write("\r\033[K"); sys.stdout.flush(); last_rendered = ""
+                    sys.stdout.write("\r\033[K"); sys.stdout.flush()
                     stream.stop()
-                    _handle_speech_turn(transcriber, final_text, session_id, endpoint)
+                    _handle_speech_turn(final_text, session_id, endpoint)
                     transcriber.reset(); endpoint.reset(); preroll.clear(); was_triggered = False; stream.start()
     except KeyboardInterrupt:
         pass
