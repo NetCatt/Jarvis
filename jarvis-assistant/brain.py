@@ -269,7 +269,7 @@ def _sanitize_spoken_reply(raw_text: str) -> str:
             continue
         filtered.append(cleaned)
     text = " ".join(filtered).strip().replace("*", "")
-    return text or "I'm on it, Fas."
+    return text or "Done."
 
 
 def converse(session_id: str, user_text: str) -> str:
