@@ -91,7 +91,7 @@ def run_orchestrator() -> None:
                     preroll.append(pcm_bytes)
                     was_triggered = False
                 if is_endpoint:
-                    final_text = (transcriber.get_transcript() or partial_text).strip()
+                    final_text = (transcriber.get_final() or partial_text).strip()
                     partial_text = ""
                     if not final_text or final_text.lower().strip(".,!?") in ("um", "uh", "er", "ah", "hmm", "umm", "uhh"):
                         endpoint.reset(); transcriber.reset(); preroll.clear(); was_triggered = False; continue

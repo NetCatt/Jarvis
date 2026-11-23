@@ -227,9 +227,12 @@ class StreamingTranscriber:
         while time.time() < deadline:
             try:
                 line = self.out_queue.get(timeout=0.1)
-                self._handle_line(line)
-                if self.last_is_final:
-                    break
+                chunk, is_final = self._parse_line(line)
+                if is_final:
+                    self.finalized_chunks = [chunk] if chunk else []
+                    self.current_partial = ""
+                    self.last_is_final = True
+                    return chunk.strip()
             except queue.Empty:
                 if self.process.poll() is not None:
                     break

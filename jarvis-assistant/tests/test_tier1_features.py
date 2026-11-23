@@ -298,5 +298,15 @@ def test_media_playback_controls(monkeypatch):
     tool_res_play, _ = parse_and_execute_local_action('TOOL_CALL: play_music({"song": "metallica"})\nPlaying metallica.')
     assert "metallica on youtube" in str(tool_res_play).lower()
 
+    from tools.terminal import run_terminal
+    assert "test_out" in run_terminal("Write-Output 'test_out'")
+    assert "blocked by safety policy" in run_terminal("format C:").lower()
+    assert run_terminal("") == "Empty terminal command."
+
+    tool_res_term, _ = parse_and_execute_local_action('TOOL_CALL: run_terminal({"command": "Write-Output hello_ross"})\nCommand executed.')
+    assert "hello_ross" in str(tool_res_term).lower()
+
+    assert _is_system_intent("run terminal command Get-Process")
+
 
 

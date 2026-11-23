@@ -59,7 +59,8 @@ def main():
     state = {
         "last_partial": "",
         "final_emitted": False,
-        "active_stream": None
+        "active_stream": None,
+        "utterance_samples": []
     }
 
     def _on_event(event):
@@ -98,6 +99,7 @@ def main():
                 state["active_stream"].stop()
             except Exception:
                 pass
+            state["utterance_samples"].clear()
             sys.stdout.write('FINAL:{"text": ""}\n')
             sys.stdout.flush()
             state["active_stream"] = _make_stream()
@@ -108,15 +110,29 @@ def main():
                 state["active_stream"].stop()
             except Exception:
                 pass
-            if not state["final_emitted"]:
-                text = state["last_partial"]
-                sys.stdout.write(f"FINAL:{json.dumps({'text': text})}\n")
-                sys.stdout.flush()
+            final_text = ""
+            if state["utterance_samples"] and len(state["utterance_samples"]) > 1600:
+                try:
+                    res = transcriber.transcribe_without_streaming(state["utterance_samples"], sample_rate)
+                    if hasattr(res, "lines") and res.lines:
+                        final_text = " ".join(l.text.strip() for l in res.lines if getattr(l, "text", "").strip()).strip()
+                    elif str(res).strip():
+                        import re
+                        final_text = re.sub(r"\[\d+\.\d+s\]", "", str(res)).strip()
+                        final_text = " ".join(final_text.split())
+                except Exception:
+                    final_text = ""
+            if not final_text:
+                final_text = state["last_partial"]
+            state["utterance_samples"].clear()
+            sys.stdout.write(f"FINAL:{json.dumps({'text': final_text})}\n")
+            sys.stdout.flush()
             state["active_stream"] = _make_stream()
             continue
         if len(chunk) < 640:
             chunk = chunk.ljust(640, b"\x00")
         samples = (np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0).tolist()
+        state["utterance_samples"].extend(samples)
         try:
             state["active_stream"].add_audio(samples, sample_rate)
         except Exception:

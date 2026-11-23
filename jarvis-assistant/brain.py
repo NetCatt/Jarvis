@@ -73,6 +73,7 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "pause_music": "Pause, resume, or toggle music or media playback.",
         "next_track": "Skip to the next music or media track.",
         "prev_track": "Skip to the previous music or media track.",
+        "run_terminal": "Execute Windows PowerShell terminal command with safety bounds.",
         "get_volume": "Get current master audio volume percentage.",
         "set_volume": "Set master audio volume level percentage (0 to 100).",
         "change_volume": "Adjust system audio volume by delta (e.g. +10 or -10 percent).",
@@ -243,6 +244,7 @@ def _is_system_intent(text: str) -> bool:
         "open app", "launch app", "open application",
         "browser", "youtube", "spotify", "play music", "play song",
         "pause", "resume", "stop music", "next track", "prev track", "skip track", "skip song",
+        "terminal", "powershell", "run command", "command", "process", "disk space", "kill",
         "open vscode", "open terminal", "open chrome"
     )
     return any(k in low for k in system_keywords)

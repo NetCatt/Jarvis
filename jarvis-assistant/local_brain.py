@@ -29,6 +29,7 @@ LOCAL_SYSTEM_PROMPT = (
     "- pause_music({})\n"
     "- next_track({})\n"
     "- prev_track({})\n"
+    "- run_terminal({\"command\": str})  (PowerShell on Windows: Start-Process, Get-Process, file operations, scripts)\n"
     "- list_agenda({\"when\": 'today'|'all'|'completed'})\n"
     "- add_task({\"title\": str})\n"
     "After emitting TOOL_CALL if needed, respond naturally to Fas. If no tool is needed, converse normally."
@@ -165,7 +166,9 @@ def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
             for kv in re.finditer(r"([a-zA-Z0-9_]+)\s*=\s*['\"]?(.*?)['\"]?(?:,|$)", raw_args):
                 args[kv.group(1)] = kv.group(2).strip("'\"")
             if not args and "=" not in raw_args and raw_args.strip("'\""):
-                args = {"target": raw_args.strip("'\"")}
+                clean_arg = raw_args.strip("'\"")
+                param_name = "command" if call_name == "run_terminal" else "target"
+                args = {param_name: clean_arg}
     from tools import TOOL_MAP
     fn = TOOL_MAP.get(call_name)
     tool_res = None

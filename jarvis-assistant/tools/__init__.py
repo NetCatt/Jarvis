@@ -4,6 +4,7 @@ from tools.dispatch import dispatch_coding_agent
 from tools.media import change_volume, get_volume, next_track, open_browser, pause_music, play_music, play_spotify, play_youtube, prev_track, search_google, set_volume
 from tools.planner import write_agent_plan
 from tools.tasks import add_task, complete_task, create_task_list, list_agenda, list_task_lists, update_task_progress
+from tools.terminal import run_terminal
 
 TOOL_FUNCTIONS = [
     sync_coding_progress,
@@ -15,6 +16,7 @@ TOOL_FUNCTIONS = [
     list_task_lists,
     write_agent_plan,
     dispatch_coding_agent,
+    run_terminal,
     open_app,
     open_folder,
     search_files,
