@@ -59,7 +59,7 @@ def run_orchestrator() -> None:
     print(f"\n[Mike]: {greeting}\n[Mike]: Listening for voice commands... (Press F9 for Standby, Ctrl+C to quit)\n")
     speak(greeting); _LAST_REPLY_TIME = time.time()
 
-    transcriber = StreamingTranscriber()
+    transcriber = StreamingTranscriber(engine=os.getenv("STT_ENGINE", "whisper"))
     endpoint = DynamicVoiceEndpoint(vad_mode=int(os.getenv("VAD_MODE", "1")))
     transcriber.start()
     preroll = collections.deque(maxlen=20)

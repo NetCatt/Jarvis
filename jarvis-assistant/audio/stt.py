@@ -18,7 +18,7 @@ class StreamingTranscriber:
     def __init__(self, model_path: str = None, sample_rate: int = 16000, engine: str = "moonshine"):
         self.model_path = model_path
         self.sample_rate = sample_rate
-        self.engine = "moonshine"
+        self.engine = engine
         self.active_engine = None
         self.process = None
         self.out_queue = queue.Queue()
@@ -33,9 +33,75 @@ class StreamingTranscriber:
         if self.process and self.process.poll() is None:
             return
         self.stop_event.clear()
-        if not self._try_start_moonshine():
-            raise RuntimeError("Failed to start moonshine_worker")
-        self.active_engine = "moonshine"
+        target = (self.engine or "moonshine").lower()
+        if "whisper" in target:
+            if self._try_start_whisper():
+                self.active_engine = "whisper"
+                return
+            if self._try_start_moonshine():
+                self.active_engine = "moonshine"
+                return
+            raise RuntimeError("Failed to start whisper_worker")
+        if self._try_start_moonshine():
+            self.active_engine = "moonshine"
+            return
+        raise RuntimeError("Failed to start speech recognition worker")
+
+    def _try_start_whisper(self) -> bool:
+        worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "whisper_worker.py")
+        if not os.path.isfile(worker_script):
+            return False
+        env = os.environ.copy()
+        if self.model_path:
+            env["WHISPER_MODEL"] = self.model_path
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-u", worker_script],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+                env=env,
+            )
+        except Exception:
+            return False
+
+        ready_line = ""
+        deadline = time.time() + 25.0
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            try:
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.01)
+                    continue
+                txt = line.decode("utf-8", errors="replace").strip()
+                if txt == "READY":
+                    ready_line = "READY"
+                    break
+                elif txt.startswith("ERROR:"):
+                    break
+            except Exception:
+                break
+
+        if ready_line != "READY":
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return False
+
+        self.process = proc
+        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self.reader_thread.start()
+        self.stderr_thread = threading.Thread(target=self._stderr_loop, daemon=True)
+        self.stderr_thread.start()
+        return True
 
     def _try_start_moonshine(self) -> bool:
         worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "moonshine_worker.py")

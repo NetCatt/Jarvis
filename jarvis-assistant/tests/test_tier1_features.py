@@ -309,4 +309,19 @@ def test_media_playback_controls(monkeypatch):
     assert _is_system_intent("run terminal command Get-Process")
 
 
+def test_whisper_engine_handshake_and_transcription():
+    from audio.stt import StreamingTranscriber
+    stt = StreamingTranscriber(engine="whisper")
+    stt.start()
+    assert stt.active_engine == "whisper"
+    assert stt.process is not None
+    stt.feed_pcm(b"\x00" * 1280)
+    final = stt.get_final()
+    assert isinstance(final, str)
+    stt.reset()
+    assert stt.get_transcript() == ""
+    stt.stop()
+    assert stt.process is None
+
+
 
