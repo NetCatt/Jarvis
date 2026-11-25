@@ -2,11 +2,17 @@ import atexit
 import json
 import os
 import subprocess
+import threading
 import urllib.request
 import sounddevice as sd
 
 _KOKORO_PROC = None
+_SPEAKING_LOCK = threading.Lock()
+_IS_SPEAKING = False
 
+def is_speaking() -> bool:
+    global _IS_SPEAKING
+    return _IS_SPEAKING
 
 def _speak_fish_stream(text: str, emotion: str = "focused") -> bool:
     key = os.getenv("FISH_AUDIO_KEY")
@@ -44,7 +50,6 @@ def _speak_fish_stream(text: str, emotion: str = "focused") -> bool:
                     stream.write(chunk)
     return True
 
-
 def _get_kokoro_worker():
     global _KOKORO_PROC
     if _KOKORO_PROC is not None and _KOKORO_PROC.poll() is None:
@@ -76,7 +81,6 @@ def _get_kokoro_worker():
     except Exception:
         return None
 
-
 def _speak_kokoro(text: str, emotion: str = "focused") -> bool:
     worker = _get_kokoro_worker()
     if not worker:
@@ -94,7 +98,6 @@ def _speak_kokoro(text: str, emotion: str = "focused") -> bool:
     except Exception:
         return False
 
-
 def _cleanup_kokoro():
     global _KOKORO_PROC
     if _KOKORO_PROC is not None:
@@ -110,9 +113,7 @@ def _cleanup_kokoro():
                 pass
         _KOKORO_PROC = None
 
-
 atexit.register(_cleanup_kokoro)
-
 
 def _speak_sapi(text: str, emotion: str = "focused") -> None:
     rate = 2 if emotion == "urgent" else -1 if emotion == "collaborative" else 1 if emotion == "inquisitive" else 0
@@ -120,29 +121,35 @@ def _speak_sapi(text: str, emotion: str = "focused") -> None:
     cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = {rate}; $s.Speak('{clean}')"
     subprocess.run(["powershell", "-Command", cmd], capture_output=True)
 
-
 def speak(text: str, emotion: str = "focused") -> None:
+    global _IS_SPEAKING
     if not text or not text.strip():
         return
-    engine = os.getenv("TTS_ENGINE", "fish_audio").lower()
-    if engine == "kokoro" or os.getenv("ENABLE_KOKORO_TTS", "0") == "1":
+    with _SPEAKING_LOCK:
+        _IS_SPEAKING = True
+    try:
+        engine = os.getenv("TTS_ENGINE", "fish_audio").lower()
+        if engine == "kokoro" or os.getenv("ENABLE_KOKORO_TTS", "0") == "1":
+            try:
+                if _speak_kokoro(text, emotion=emotion):
+                    return
+            except Exception:
+                pass
         try:
-            if _speak_kokoro(text, emotion=emotion):
+            if _speak_fish_stream(text, emotion=emotion):
                 return
         except Exception:
             pass
-    try:
-        if _speak_fish_stream(text, emotion=emotion):
-            return
-    except Exception:
-        pass
-    if engine != "sapi" and os.getenv("ENABLE_KOKORO_FALLBACK", "0") == "1":
+        if engine != "sapi" and os.getenv("ENABLE_KOKORO_FALLBACK", "0") == "1":
+            try:
+                if _speak_kokoro(text, emotion=emotion):
+                    return
+            except Exception:
+                pass
         try:
-            if _speak_kokoro(text, emotion=emotion):
-                return
+            _speak_sapi(text, emotion=emotion)
         except Exception:
             pass
-    try:
-        _speak_sapi(text, emotion=emotion)
-    except Exception:
-        pass
+    finally:
+        with _SPEAKING_LOCK:
+            _IS_SPEAKING = False

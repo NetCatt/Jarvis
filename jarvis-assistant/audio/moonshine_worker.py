@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 
 def _read_exact(stream, n):
@@ -14,7 +15,6 @@ def _read_exact(stream, n):
 def main():
     try:
         import numpy as np
-        import moonshine_voice
         from moonshine_voice import ModelArch, get_model_for_language
         from moonshine_voice.transcriber import Transcriber, LineTextChanged, LineCompleted
     except Exception as e:
@@ -42,12 +42,7 @@ def main():
         transcriber = Transcriber(model_path, model_arch=ModelArch.MEDIUM_STREAMING, update_interval=update_interval)
         try:
             transcriber.set_keyterms([
-                "Fas", "Faas", "Mike", "Ross", "agenda", "Daily Agenda", "project", "repo",
-                "subproject", "task", "tasks", "list", "Redis", "caching", "standby", "tag", "flag",
-                "isolate", "code", "branch", "git", "status", "tests", "benchmark", "folder",
-                "browser", "YouTube", "Spotify", "upcoming", "neither", "progress", "extension",
-                "complete", "completed", "due", "context", "today", "volume", "percent", "downloads", "search",
-                "pause", "resume", "music", "play", "track", "skip", "song", "stop"
+                "Fas", "Mike", "Ross", "Daily Agenda", "Spotify", "YouTube", "Google", "volume", "tasks"
             ])
         except Exception:
             pass
@@ -56,11 +51,13 @@ def main():
         sys.stderr.flush()
         sys.exit(1)
 
+    max_cap = sample_rate * 30
+    buf_np = np.empty(max_cap, dtype=np.float32)
     state = {
         "last_partial": "",
         "final_emitted": False,
         "active_stream": None,
-        "utterance_samples": []
+        "len": 0,
     }
 
     def _on_event(event):
@@ -99,7 +96,7 @@ def main():
                 state["active_stream"].stop()
             except Exception:
                 pass
-            state["utterance_samples"].clear()
+            state["len"] = 0
             sys.stdout.write('FINAL:{"text": ""}\n')
             sys.stdout.flush()
             state["active_stream"] = _make_stream()
@@ -111,28 +108,30 @@ def main():
             except Exception:
                 pass
             final_text = ""
-            if state["utterance_samples"] and len(state["utterance_samples"]) > 1600:
+            if state["len"] > 1600:
                 try:
-                    res = transcriber.transcribe_without_streaming(state["utterance_samples"], sample_rate)
+                    res = transcriber.transcribe_without_streaming(buf_np[:state["len"]].tolist(), sample_rate)
                     if hasattr(res, "lines") and res.lines:
                         final_text = " ".join(l.text.strip() for l in res.lines if getattr(l, "text", "").strip()).strip()
                     elif str(res).strip():
-                        import re
                         final_text = re.sub(r"\[\d+\.\d+s\]", "", str(res)).strip()
                         final_text = " ".join(final_text.split())
                 except Exception:
                     final_text = ""
             if not final_text:
                 final_text = state["last_partial"]
-            state["utterance_samples"].clear()
+            state["len"] = 0
             sys.stdout.write(f"FINAL:{json.dumps({'text': final_text})}\n")
             sys.stdout.flush()
             state["active_stream"] = _make_stream()
             continue
         if len(chunk) < 640:
             chunk = chunk.ljust(640, b"\x00")
-        samples = (np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0).tolist()
-        state["utterance_samples"].extend(samples)
+        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+        n = len(samples)
+        if state["len"] + n <= max_cap:
+            buf_np[state["len"]:state["len"] + n] = samples
+            state["len"] += n
         try:
             state["active_stream"].add_audio(samples, sample_rate)
         except Exception:

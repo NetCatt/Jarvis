@@ -1,19 +1,40 @@
+import array
 import collections
+import math
+import os
 import webrtcvad
 
 class DynamicVoiceEndpoint:
-    def __init__(self, sample_rate: int = 16000, frame_ms: int = 20, vad_mode: int = 1, stop_phrase: str = "over"):
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        frame_ms: int = 20,
+        vad_mode: int = 2,
+        stop_phrase: str = "over",
+        base_silence_ms: int = 800,
+        max_duration_sec: float = None,
+        onset_frames: int = 3,
+    ):
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
         self.vad_mode = vad_mode
         self.stop_phrase = stop_phrase.strip().lower() if stop_phrase else ""
+        self.base_silence_ms = int(base_silence_ms)
+        self.onset_frames = max(1, int(onset_frames))
         self.vad = webrtcvad.Vad(self.vad_mode)
         self.expected_frame_len = int(self.sample_rate * (self.frame_ms / 1000) * 2)
         self.hangover_buffer = collections.deque(maxlen=12)
         self.silence_ms = 0
         self.stagnant_ms = 0
+        self.speech_ms = 0
+        self.consecutive_speech = 0
+        self.active_speech_frames = 0
         self.last_text = ""
         self.triggered = False
+        self.noise_floor = 0.0
+        self.min_rms = float(os.getenv("VAD_MIN_RMS", "120"))
+        cap_sec = max_duration_sec if max_duration_sec is not None else float(os.getenv("VAD_MAX_DURATION_SEC", "12"))
+        self.max_duration_ms = int(cap_sec * 1000)
         self.conjunctions = {
             "and", "or", "to", "because", "with", "but", "so", "that", "if",
             "when", "while", "then", "since", "as", "like", "for",
@@ -23,6 +44,9 @@ class DynamicVoiceEndpoint:
         self.hangover_buffer.clear()
         self.silence_ms = 0
         self.stagnant_ms = 0
+        self.speech_ms = 0
+        self.consecutive_speech = 0
+        self.active_speech_frames = 0
         self.last_text = ""
         self.triggered = False
 
@@ -37,12 +61,23 @@ class DynamicVoiceEndpoint:
             return stripped[: len(stripped) - len(self.stop_phrase)].rstrip(" .,!?")
         return text
 
+    def _frame_rms(self, pcm_frame: bytes) -> float:
+        samples = array.array("h")
+        samples.frombytes(pcm_frame)
+        if not samples:
+            return 0.0
+        return math.sqrt(sum(s * s for s in samples) / len(samples))
+
     def process_frame(self, pcm_frame: bytes, current_transcript: str = "") -> tuple[bool, bool]:
         if len(pcm_frame) < self.expected_frame_len:
             pcm_frame = pcm_frame.ljust(self.expected_frame_len, b"\x00")
         elif len(pcm_frame) > self.expected_frame_len:
             pcm_frame = pcm_frame[:self.expected_frame_len]
-        raw_speech = self.vad.is_speech(pcm_frame, self.sample_rate)
+        rms = self._frame_rms(pcm_frame)
+        vad_speech = self.vad.is_speech(pcm_frame, self.sample_rate)
+        if not self.triggered and not vad_speech:
+            self.noise_floor = 0.94 * self.noise_floor + 0.06 * rms
+        raw_speech = vad_speech and (rms >= max(self.min_rms, self.noise_floor * 2.2))
         self.hangover_buffer.append(raw_speech)
         ratio = sum(self.hangover_buffer) / len(self.hangover_buffer)
         smoothed_speech = ratio >= 0.35
@@ -50,21 +85,29 @@ class DynamicVoiceEndpoint:
         if self.stop_phrase and (clean_text == self.stop_phrase or clean_text.endswith(" " + self.stop_phrase)):
             return smoothed_speech, True
         if not self.triggered:
-            if raw_speech or (clean_text and len(clean_text) > 0):
+            self.consecutive_speech = (self.consecutive_speech + 1) if raw_speech else 0
+            if self.consecutive_speech >= self.onset_frames or (clean_text and len(clean_text) > 0):
                 self.triggered = True
                 self.silence_ms = 0
                 self.stagnant_ms = 0
+                self.speech_ms = 0
+                self.active_speech_frames = max(self.consecutive_speech, 1 if raw_speech else 0)
                 self.last_text = clean_text
             else:
                 return False, False
+        elif raw_speech:
+            self.active_speech_frames += 1
+        self.speech_ms += self.frame_ms
+        if self.speech_ms >= self.max_duration_ms:
+            return smoothed_speech, True
         words = clean_text.split() if clean_text else []
         last_word = words[-1].rstrip(" .,!?") if words else ""
         if last_word in self.conjunctions:
-            threshold_ms = 1400
+            threshold_ms = max(self.base_silence_ms + 600, 1400)
         elif len(words) < 3:
-            threshold_ms = 1200
+            threshold_ms = max(self.base_silence_ms + 400, 1200)
         else:
-            threshold_ms = 800
+            threshold_ms = self.base_silence_ms
         if clean_text and clean_text == self.last_text:
             self.stagnant_ms += self.frame_ms
         else:

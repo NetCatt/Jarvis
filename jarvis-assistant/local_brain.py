@@ -13,34 +13,26 @@ LOCAL_SYSTEM_PROMPT = (
     "You possess photographic memory, street smarts, razor-sharp wit, and fierce loyalty to Fas. "
     "Always address the user as Fas. Speak naturally, authentically, and confidently in 1-2 spoken sentences.\n"
     "CRITICAL VOICE DIRECTIVES:\n"
-    "- You are speaking live through text-to-speech. Speak directly to Fas in the first person ('I', 'we').\n"
-    "- NEVER write third-person screenplay descriptions, stage directions, or character names (e.g., 'Mike is...', 'Mike calls Fas...', 'Mike's tone changes...').\n"
+    "- Respond directly and concisely in spoken English without thinking tags (<think>), inner reasoning, stage directions, or character names.\n"
+    "- Speak directly to Fas in the first person ('I', 'we').\n"
     "- Banter warmly when Fas is chatting; stay crisp, razor-sharp, and proactive when executing tasks.\n"
-    "When Fas asks to perform system actions, you MUST emit a tool call on its own line:\n"
+    "- If Fas asks to perform system actions, you MUST emit a tool call on its own line:\n"
     "TOOL_CALL: tool_name({\"param\": \"value\"})\n"
-    "Available tools:\n"
-    "- set_volume({\"level\": int})  (0 to 100)\n"
-    "- change_volume({\"delta\": int})  (+10 or -10)\n"
-    "- get_volume({})\n"
-    "- open_folder({\"target\": str})  ('downloads', 'models', 'desktop', 'code', or path)\n"
-    "- search_files({\"query\": str})\n"
-    "- open_app({\"app_name\": str})\n"
-    "- open_browser({\"url\": str})\n"
-    "- search_google({\"query\": str})\n"
-    "- play_music({\"song\": str, \"platform\": str})\n"
-    "- pause_music({})\n"
-    "- next_track({})\n"
-    "- prev_track({})\n"
-    "- run_terminal({\"command\": str})  (PowerShell on Windows: Start-Process, Get-Process, file operations, scripts)\n"
-    "- list_agenda({\"when\": 'today'|'all'|'completed'})\n"
-    "- add_task({\"title\": str})\n"
+    "Universal OS primitives:\n"
+    "- os_input({\"keys\": [\"playpause\"]}) or os_input({\"keys\": [\"ctrl\", \"w\"], \"hotkey\": true}) or os_input({\"text\": str})\n"
+    "- os_launch({\"target\": str})  (e.g. 'spotify:', 'ms-settings:', 'notepad', app path)\n"
+    "- web_dispatch({\"query\": str, \"engine\": 'google'|'youtube'|'spotify'|'github', \"url\": str})\n"
+    "- os_context({\"query_type\": 'now_playing'|'active_window'|'clipboard'|'system_stats'})\n"
+    "Core tools:\n"
+    "- set_volume({\"level\": int}), change_volume({\"delta\": int}), get_volume({})\n"
+    "- open_folder({\"target\": str}), search_files({\"query\": str})\n"
+    "- run_terminal({\"command\": str})\n"
+    "- list_agenda({\"when\": 'today'|'all'|'completed'}), add_task({\"title\": str})\n"
     "After emitting TOOL_CALL if needed, respond naturally to Fas. If no tool is needed, converse normally."
 )
 
-
 def get_server_port() -> int:
     return int(os.getenv("LOCAL_BRAIN_PORT", "8088"))
-
 
 def is_server_running() -> bool:
     port = get_server_port()
@@ -52,16 +44,13 @@ def is_server_running() -> bool:
     except Exception:
         return False
 
-
 def start_local_server() -> bool:
     global _SERVER_PROC
     if is_server_running():
         return True
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.getenv(
-        "LOCAL_BRAIN_MODEL_PATH",
-        os.path.join(base_dir, "models", "qwen2.5-1.5b-instruct-q4_k_m.gguf"),
-    )
+    default_model = os.path.join(base_dir, "models", "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
+    model_path = os.getenv("LOCAL_BRAIN_MODEL_PATH", default_model)
     if not os.path.exists(model_path):
         return False
     runner_path = os.path.join(base_dir, "tools", "bin", "llama-server.exe")
@@ -71,8 +60,14 @@ def start_local_server() -> bool:
     cmd = [
         runner_path,
         "-m", model_path,
-        "-c", "2048",
+        "-c", "1024",
+        "-b", "512",
+        "-ub", "256",
         "-t", "2",
+        "-fa", "on",
+        "--parallel", "1",
+        "--reasoning", "off",
+        "--reasoning-budget", "0",
         "--port", str(port),
         "--host", "127.0.0.1",
     ]
@@ -92,7 +87,6 @@ def start_local_server() -> bool:
         return False
     return is_server_running()
 
-
 def stop_local_server() -> None:
     global _SERVER_PROC
     if _SERVER_PROC:
@@ -106,9 +100,7 @@ def stop_local_server() -> None:
                 pass
         _SERVER_PROC = None
 
-
 atexit.register(stop_local_server)
-
 
 def query_local_brain(system_prompt: str, user_text: str, history: list = None) -> str | None:
     port = get_server_port()
@@ -132,12 +124,13 @@ def query_local_brain(system_prompt: str, user_text: str, history: list = None) 
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"].strip().replace("*", "")
+            raw = data["choices"][0]["message"]["content"]
+            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+            return cleaned.strip().replace("*", "")
     except Exception:
         return None
-
 
 def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
     action_match = re.search(r"(?:ACTION|TOOL_CALL|TOOL):\s*([a-zA-Z0-9_]+)\s*\((.*?)\)", text, re.DOTALL)
@@ -150,6 +143,12 @@ def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
                 args = json.loads(raw_args)
             except Exception:
                 args = {}
+            from tools.safety_gate import evaluate_tool_safety
+            status, safety_msg = evaluate_tool_safety(call_name, args)
+            if status == "BLOCKED":
+                return safety_msg, f"I can't do that, Fas. {safety_msg}"
+            if status == "CONFIRM":
+                return safety_msg, safety_msg
             from tools import TOOL_MAP
             fn = TOOL_MAP.get(call_name)
             tool_res = str(fn(**args)) if fn else None
@@ -171,6 +170,12 @@ def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
                 clean_arg = raw_args.strip("'\"")
                 param_name = "command" if call_name == "run_terminal" else "target"
                 args = {param_name: clean_arg}
+    from tools.safety_gate import evaluate_tool_safety
+    status, safety_msg = evaluate_tool_safety(call_name, args)
+    if status == "BLOCKED":
+        return safety_msg, f"I can't do that, Fas. {safety_msg}"
+    if status == "CONFIRM":
+        return safety_msg, safety_msg
     from tools import TOOL_MAP
     fn = TOOL_MAP.get(call_name)
     tool_res = None
@@ -183,13 +188,33 @@ def parse_and_execute_local_action(text: str) -> tuple[str | None, str]:
     spoken = re.sub(r"^\s*Spoken:\s*", "", spoken.strip(), flags=re.IGNORECASE)
     return tool_res, spoken or (tool_res or "")
 
-
 def execute_local_turn(user_text: str, history: list = None, system_prompt: str = None) -> str | None:
+    from tools.safety_gate import handle_pending_confirmation
+    handled, reply = handle_pending_confirmation(user_text)
+    if handled and reply:
+        return reply
     prompt = f"{system_prompt}\n\n{LOCAL_SYSTEM_PROMPT}" if system_prompt else LOCAL_SYSTEM_PROMPT
+    try:
+        from memory.retrieval import recall
+        from memory.store import top_facts
+        fact_rows = top_facts("Fas", limit=5)
+        facts_str = "; ".join(f"{r['predicate']}={r['value']}" for r in fact_rows if "predicate" in r and "value" in r)
+        snippets = recall(user_text, k=3)
+        mem_parts = []
+        if facts_str:
+            mem_parts.append(f"Known facts: {facts_str}")
+        if snippets:
+            mem_parts.extend(f"- {s}" for s in snippets if s)
+        if mem_parts:
+            prompt = f"{prompt}\n\nRECALLED MEMORY OF FAS:\n" + "\n".join(mem_parts)
+    except Exception:
+        pass
     raw = query_local_brain(prompt, user_text, history)
     if not raw:
         return None
     tool_res, spoken = parse_and_execute_local_action(raw)
+    if tool_res and (not spoken or len(spoken.strip()) <= 3 or any(p in spoken.lower() for p in ("let me check", "pull that", "checking", "one sec", "hang on"))):
+        return tool_res.strip()
     if spoken and len(spoken.strip()) > 3:
         return spoken.strip()
     if tool_res:

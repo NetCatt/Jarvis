@@ -19,16 +19,13 @@ env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"
 load_dotenv(env_path)
 load_dotenv()
 
-
 def _run_git(path: str, args: list[str]) -> str:
     try:
         return subprocess.check_output(["git", "-C", path] + args, stderr=subprocess.DEVNULL, timeout=3.0, text=True, errors="ignore").strip()[:1500]
     except Exception:
         return ""
 
-
 def get_repo_snapshot(repo_path: str) -> dict:
-    """Read git state & first 60 lines of local plan."""
     status, commits = _run_git(repo_path, ["status", "-s"]), _run_git(repo_path, ["log", "-n", "3", "--oneline"])
     diff = _run_git(repo_path, ["diff", "--stat", "HEAD~1"])
     plan = ""
@@ -40,9 +37,7 @@ def get_repo_snapshot(repo_path: str) -> dict:
             break
     return {"status": status, "commits": commits, "diff": diff, "plan": plan}
 
-
 def _ask_gemini_reconcile(snap: dict, tasks: list[dict], agent_note: str) -> dict:
-    """Query Gemini in JSON mode via the shared fallback helper."""
     prompt = (
         f"Reconcile code with Google Tasks.\nAgent Note: {agent_note or 'Inspect Git'}\n"
         f"Snapshot: {json.dumps(snap)}\nTasks: {json.dumps(tasks)}\n"
@@ -61,13 +56,10 @@ def _ask_gemini_reconcile(snap: dict, tasks: list[dict], agent_note: str) -> dic
             return parsed
     except Exception:
         pass
-    # Deterministic fallback when all APIs unavailable
     comp = [t["id"] for t in tasks if any(w in t["title"].lower() for w in agent_note.lower().split() if len(w) > 3)]
     return {"completed_task_ids": comp, "progress_updates": [], "new_tasks": [], "next_plan_md": "", "spoken_summary": "Reconciled tasks locally."}
 
-
 def _apply_reconciliation(dec: dict, tasks: list[dict], target: str) -> tuple[list[str], list[str], list[str], list[str], str]:
-    """Apply completed/updated/new tasks to Google Tasks or local cache and NEXT_PLAN.md."""
     t_map = {t["id"]: t for t in tasks}
     done, upd, added = [], [], []
     has_oa = _has_oauth()
@@ -111,9 +103,7 @@ def _apply_reconciliation(dec: dict, tasks: list[dict], target: str) -> tuple[li
     rem = [t["title"] for t in tasks if t["id"] not in dec.get("completed_task_ids", [])] + added
     return done, upd, added, rem, next_md
 
-
 def sync_coding_progress(agent_note: str = "", repo_path: str = "") -> str:
-    """Reconcile Git & Agent activity against Google Tasks using Gemini 3.8 Flash JSON."""
     target = repo_path.strip() or os.getenv("DEFAULT_REPO_PATH", os.getcwd())
     snap, tasks = get_repo_snapshot(target), get_open_tasks_raw()
     dec = _ask_gemini_reconcile(snap, tasks, agent_note)

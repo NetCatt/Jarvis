@@ -309,15 +309,20 @@ def test_media_playback_controls(monkeypatch):
     assert _is_system_intent("run terminal command Get-Process")
 
 
-def test_whisper_engine_handshake_and_transcription():
+def test_hybrid_and_moonshine_stt_transcribe(monkeypatch):
     from audio.stt import StreamingTranscriber
-    stt = StreamingTranscriber(engine="whisper")
+    stt = StreamingTranscriber(engine="hybrid")
     stt.start()
-    assert stt.active_engine == "whisper"
+    assert stt.active_engine == "hybrid"
     assert stt.process is not None
-    stt.feed_pcm(b"\x00" * 1280)
-    final = stt.get_final()
-    assert isinstance(final, str)
+    stt.feed_pcm(b"\x00" * 1280, drain_timeout=0.0)
+    monkeypatch.setenv("GROQ_API_KEY", "test_key")
+    monkeypatch.setattr("audio.stt.transcribe_wav_groq", lambda wav, key: "check project status")
+    assert stt.transcribe_hybrid(b"\x01\x00" * 2400) == "check project status"
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setattr("audio.stt.transcribe_wav_gemini", lambda wav, key: "gemini fallback transcript")
+    monkeypatch.setenv("GEMINI_API_KEY", "gem_key")
+    assert stt.transcribe_hybrid(b"\x01\x00" * 2400) == "gemini fallback transcript"
     stt.reset()
     assert stt.get_transcript() == ""
     stt.stop()

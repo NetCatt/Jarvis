@@ -34,7 +34,7 @@ load_dotenv()
 _CLIENT = None
 DEFAULT_SESSION = "default"
 _LAST_DECAY_DATE = None
-_CHAINABLE_TOOLS = {"dispatch_coding_agent", "list_agenda", "list_task_lists", "sync_coding_progress"}
+_CHAINABLE_TOOLS = {"dispatch_coding_agent", "list_agenda", "list_task_lists", "sync_coding_progress", "os_context", "run_terminal"}
 
 
 def _get_client():
@@ -77,6 +77,10 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "get_volume": "Get current master audio volume percentage.",
         "set_volume": "Set master audio volume level percentage (0 to 100).",
         "change_volume": "Adjust system audio volume by delta (e.g. +10 or -10 percent).",
+        "os_input": "Send hardware media keys, window hotkeys, or type unicode text into the active window.",
+        "os_launch": "Launch application, URI protocol, or system target.",
+        "web_dispatch": "Dispatch search query or URL to browser across search engines.",
+        "os_context": "Inspect system context including active window title, clipboard content, or RAM stats.",
     }
     for fn in tool_functions:
         sig = inspect.signature(fn)
@@ -194,6 +198,14 @@ def _try_fast_action(user_text: str) -> str | None:
         from tools.media import open_browser
         open_browser("https://www.youtube.com")
         return "Opening YouTube for you now, Fas."
+    if any(k in low for k in (
+        "which song", "what song", "what's playing", "what is playing",
+        "what am i listening", "what was i playing", "song is playing",
+        "song i was playing", "song is going on", "look at my spotify",
+        "check spotify", "now playing"
+    )):
+        from tools.os_context import os_context
+        return os_context("now_playing")
     if "open a song" in low or "play a song" in low or "play music" in low or low.startswith("play "):
         from tools.media import play_music
         cleaned = re.sub(r"^(can you\s+)?(open\s+a\s+song(\s+for\s+me)?|play\s+a\s+song(\s+for\s+me)?|play\s+music|play)\s*", "", low).strip("?.! ")
@@ -245,7 +257,8 @@ def _is_system_intent(text: str) -> bool:
         "browser", "youtube", "spotify", "play music", "play song",
         "pause", "resume", "stop music", "next track", "prev track", "skip track", "skip song",
         "terminal", "powershell", "run command", "command", "process", "disk space", "kill",
-        "open vscode", "open terminal", "open chrome"
+        "open vscode", "open terminal", "open chrome",
+        "close tab", "close window", "active window", "clipboard", "system stats", "keys", "hotkey"
     )
     return any(k in low for k in system_keywords)
 
@@ -287,6 +300,13 @@ def _sanitize_spoken_reply(raw_text: str) -> str:
 
 
 def converse(session_id: str, user_text: str) -> str:
+    from tools.safety_gate import handle_pending_confirmation
+    handled, pending_reply = handle_pending_confirmation(user_text)
+    if handled and pending_reply:
+        append_turn(session_id, "user", user_text, None)
+        append_turn(session_id, "mike", pending_reply, None)
+        return pending_reply
+
     fast_reply = _try_fast_action(user_text)
     if fast_reply:
         append_turn(session_id, "user", user_text, None)
@@ -317,7 +337,7 @@ def converse(session_id: str, user_text: str) -> str:
     if local_target and _call_gemini_rest == _ORIG_CALL_GEMINI_REST:
         try:
             from local_brain import execute_local_turn
-            local_reply = execute_local_turn(user_text, history, system_prompt=system_prompt)
+            local_reply = execute_local_turn(user_text, history)
             if local_reply:
                 reply = _sanitize_spoken_reply(local_reply)
                 append_turn(session_id, "user", user_text, embed(user_text))
@@ -360,7 +380,7 @@ def converse(session_id: str, user_text: str) -> str:
         if not resp_dict or not resp_dict.get("candidates"):
             try:
                 from local_brain import execute_local_turn
-                local_reply = execute_local_turn(user_text, history, system_prompt=system_prompt)
+                local_reply = execute_local_turn(user_text, history)
                 if local_reply:
                     reply = _sanitize_spoken_reply(local_reply)
                     break

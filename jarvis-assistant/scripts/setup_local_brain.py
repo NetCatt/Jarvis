@@ -3,9 +3,9 @@ import sys
 import urllib.request
 import zipfile
 
-GGUF_URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+QWEN3_URL = "https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+QWEN25_URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
 RUNNER_URL = "https://github.com/ggerganov/llama.cpp/releases/download/b12547/llama-b12547-bin-win-cpu-x64.zip"
-
 
 def _download_file(url: str, dest_path: str) -> None:
     if os.path.exists(dest_path):
@@ -15,8 +15,7 @@ def _download_file(url: str, dest_path: str) -> None:
     urllib.request.urlretrieve(url, temp_path)
     os.replace(temp_path, dest_path)
 
-
-def setup() -> None:
+def setup(target_model: str = "qwen3") -> None:
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     models_dir = os.path.join(base_dir, "models")
     bin_dir = os.path.join(base_dir, "tools", "bin")
@@ -37,13 +36,15 @@ def setup() -> None:
         except Exception:
             pass
 
-    model_dest = os.path.join(models_dir, "qwen2.5-1.5b-instruct-q4_k_m.gguf")
+    model_dest = os.path.join(models_dir, "Qwen_Qwen3-1.7B-Q4_K_M.gguf")
+    model_url = QWEN3_URL
+
     if not os.path.exists(model_dest):
         try:
-            _download_file(GGUF_URL, model_dest)
+            _download_file(model_url, model_dest)
         except Exception:
             pass
 
-
 if __name__ == "__main__":
-    setup()
+    choice = sys.argv[1] if len(sys.argv) > 1 else "qwen3"
+    setup(choice)

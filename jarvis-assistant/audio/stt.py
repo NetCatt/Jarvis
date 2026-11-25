@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import os
 import queue
@@ -5,6 +7,14 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import uuid
+import wave
+
+_SILENCE_HALLUCINATIONS = {
+    "thank you", "thanks", "thanks for watching", "thank you for watching",
+    "you", "so", "bye", "subtitles by", "amara.org",
+}
 
 def render_live_token(text: str) -> None:
     if text:
@@ -13,6 +23,76 @@ def render_live_token(text: str) -> None:
             clean = "..." + clean[-62:]
         sys.stdout.write(f"\r\033[K[Fas, live]: {clean}")
         sys.stdout.flush()
+
+def _pcm_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()
+
+def transcribe_wav_groq(wav_bytes: bytes, api_key: str, prompt: str = "Fas, Mike, Daily Agenda, Spotify, YouTube.") -> str | None:
+    boundary = "JBound" + uuid.uuid4().hex
+    nl = "\r\n"
+    parts = [
+        f'--{boundary}{nl}Content-Disposition: form-data; name="model"{nl}{nl}whisper-large-v3-turbo{nl}',
+        f'--{boundary}{nl}Content-Disposition: form-data; name="language"{nl}{nl}en{nl}',
+        f'--{boundary}{nl}Content-Disposition: form-data; name="prompt"{nl}{nl}{prompt}{nl}',
+        f'--{boundary}{nl}Content-Disposition: form-data; name="response_format"{nl}{nl}verbose_json{nl}',
+        f'--{boundary}{nl}Content-Disposition: form-data; name="file"; filename="audio.wav"{nl}Content-Type: audio/wav{nl}{nl}',
+    ]
+    body = "".join(parts).encode("utf-8") + wav_bytes + f"{nl}--{boundary}--{nl}".encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/audio/transcriptions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key.strip()}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "Jarvis/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=float(os.getenv("GROQ_STT_TIMEOUT_SEC", "4.0"))) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            txt = (data.get("text") or "").strip()
+            if not txt:
+                return None
+            segs = data.get("segments") or []
+            if segs and all(float(s.get("no_speech_prob", 0.0)) >= 0.65 for s in segs):
+                return None
+            clean_low = txt.lower().strip(".,!? ")
+            if clean_low in _SILENCE_HALLUCINATIONS and (not segs or max(float(s.get("no_speech_prob", 0.0)) for s in segs) >= 0.25):
+                return None
+            return txt
+    except Exception:
+        return None
+
+def transcribe_wav_gemini(wav_bytes: bytes, api_key: str) -> str | None:
+    model = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key.strip()}"
+    b64 = base64.b64encode(wav_bytes).decode("ascii")
+    payload = json.dumps({
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": "audio/wav", "data": b64}},
+                {"text": "Transcribe this English speech verbatim. Return ONLY the transcript text, or empty string if silent."},
+            ],
+        }],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 128},
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=float(os.getenv("GEMINI_TIMEOUT_SEC", "4.0"))) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            txt = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+            if txt.lower().strip(".,!? ") in _SILENCE_HALLUCINATIONS:
+                return None
+            return txt or None
+    except Exception:
+        return None
 
 class StreamingTranscriber:
     def __init__(self, model_path: str = None, sample_rate: int = 16000, engine: str = "moonshine"):
@@ -33,75 +113,10 @@ class StreamingTranscriber:
         if self.process and self.process.poll() is None:
             return
         self.stop_event.clear()
-        target = (self.engine or "moonshine").lower()
-        if "whisper" in target:
-            if self._try_start_whisper():
-                self.active_engine = "whisper"
-                return
-            if self._try_start_moonshine():
-                self.active_engine = "moonshine"
-                return
-            raise RuntimeError("Failed to start whisper_worker")
         if self._try_start_moonshine():
-            self.active_engine = "moonshine"
+            self.active_engine = "hybrid" if (self.engine or "").lower() == "hybrid" else "moonshine"
             return
         raise RuntimeError("Failed to start speech recognition worker")
-
-    def _try_start_whisper(self) -> bool:
-        worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "whisper_worker.py")
-        if not os.path.isfile(worker_script):
-            return False
-        env = os.environ.copy()
-        if self.model_path:
-            env["WHISPER_MODEL"] = self.model_path
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, "-u", worker_script],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-                env=env,
-            )
-        except Exception:
-            return False
-
-        ready_line = ""
-        deadline = time.time() + 25.0
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                break
-            try:
-                line = proc.stdout.readline()
-                if not line:
-                    time.sleep(0.01)
-                    continue
-                txt = line.decode("utf-8", errors="replace").strip()
-                if txt == "READY":
-                    ready_line = "READY"
-                    break
-                elif txt.startswith("ERROR:"):
-                    break
-            except Exception:
-                break
-
-        if ready_line != "READY":
-            try:
-                proc.terminate()
-                proc.wait(timeout=1.0)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            return False
-
-        self.process = proc
-        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self.reader_thread.start()
-        self.stderr_thread = threading.Thread(target=self._stderr_loop, daemon=True)
-        self.stderr_thread.start()
-        return True
 
     def _try_start_moonshine(self) -> bool:
         worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "moonshine_worker.py")
@@ -255,10 +270,8 @@ class StreamingTranscriber:
             parts.append(self.current_partial)
         return " ".join(parts).strip()
 
-    def feed_pcm(self, pcm_bytes: bytes) -> tuple[str, bool]:
+    def feed_pcm(self, pcm_bytes: bytes, drain_timeout: float = 0.003) -> tuple[str, bool]:
         if not self.process or not self.process.stdin or self.process.poll() is not None:
-            sys.stderr.write("STT: Worker process not running\n")
-            sys.stderr.flush()
             return self.get_transcript(), False
         try:
             for offset in range(0, len(pcm_bytes), 640):
@@ -267,15 +280,14 @@ class StreamingTranscriber:
                     frame = frame.ljust(640, b"\x00")
                 self.process.stdin.write(frame)
             self.process.stdin.flush()
-        except (BrokenPipeError, OSError, RuntimeError) as e:
-            sys.stderr.write(f"STT: Worker write error: {e}\n")
-            sys.stderr.flush()
+        except (BrokenPipeError, OSError, RuntimeError):
             return self.get_transcript(), False
-        try:
-            line = self.out_queue.get(timeout=0.005)
-            self._handle_line(line)
-        except queue.Empty:
-            pass
+        if drain_timeout > 0:
+            try:
+                line = self.out_queue.get(timeout=drain_timeout)
+                self._handle_line(line)
+            except queue.Empty:
+                pass
         while not self.out_queue.empty():
             try:
                 line = self.out_queue.get_nowait()
@@ -284,15 +296,15 @@ class StreamingTranscriber:
                 break
         return self.get_transcript(), self.last_is_final
 
-    def get_final(self) -> str:
+    def get_final(self, timeout_sec: float = 5.0) -> str:
         if not self.process or self.process.poll() is not None:
             return self.get_transcript()
         self.process.stdin.write(b"CMD:FINAL".ljust(640, b"\x00"))
         self.process.stdin.flush()
-        deadline = time.time() + 2.0
+        deadline = time.time() + timeout_sec
         while time.time() < deadline:
             try:
-                line = self.out_queue.get(timeout=0.1)
+                line = self.out_queue.get(timeout=0.05)
                 chunk, is_final = self._parse_line(line)
                 if is_final:
                     self.finalized_chunks = [chunk] if chunk else []
@@ -303,6 +315,22 @@ class StreamingTranscriber:
                 if self.process.poll() is not None:
                     break
         return self.get_transcript()
+
+    def transcribe_hybrid(self, pcm_bytes: bytes) -> str:
+        if pcm_bytes and len(pcm_bytes) > 3200:
+            wav_bytes = _pcm_to_wav_bytes(pcm_bytes, self.sample_rate)
+            groq_key = os.getenv("GROQ_API_KEY", "").strip()
+            if groq_key:
+                res = transcribe_wav_groq(wav_bytes, groq_key)
+                if res is not None:
+                    return res
+                return ""
+            gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+            if gemini_key and os.getenv("STT_GEMINI_FALLBACK", "1") == "1":
+                res = transcribe_wav_gemini(wav_bytes, gemini_key)
+                if res is not None:
+                    return res
+        return self.get_final()
 
     def reset(self) -> None:
         self.finalized_chunks = []
@@ -317,7 +345,16 @@ class StreamingTranscriber:
             try:
                 self.process.stdin.write(b"CMD:RESET".ljust(640, b"\x00"))
                 self.process.stdin.flush()
-                time.sleep(0.01)
+                deadline = time.time() + 0.35
+                while time.time() < deadline:
+                    try:
+                        line = self.out_queue.get(timeout=0.05)
+                        _, is_final = self._parse_line(line)
+                        if is_final:
+                            break
+                    except queue.Empty:
+                        if self.process.poll() is not None:
+                            break
             except Exception:
                 pass
         while not self.out_queue.empty():
