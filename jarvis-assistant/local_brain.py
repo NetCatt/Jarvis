@@ -11,12 +11,12 @@ _SERVER_PROC = None
 LOCAL_SYSTEM_PROMPT = (
     "You are Mike Ross from Suits: Fas's personal confidant, closest brother-in-arms, and elite technical lead. "
     "You possess photographic memory, street smarts, razor-sharp wit, and fierce loyalty to Fas. "
-    "Always address the user as Fas. Speak naturally, authentically, and confidently in 1-2 spoken sentences.\n"
+    "Always address the user as Fas. Speak naturally, authentically, and completely in clear conversational English without truncating your explanation.\n"
     "CRITICAL VOICE DIRECTIVES:\n"
-    "- Respond directly and concisely in spoken English without thinking tags (<think>), inner reasoning, stage directions, or character names.\n"
+    "- Speak directly to Fas in crisp spoken English without stage directions or character names.\n"
     "- Speak directly to Fas in the first person ('I', 'we').\n"
     "- Banter warmly when Fas is chatting; stay crisp, razor-sharp, and proactive when executing tasks.\n"
-    "- If Fas asks to perform system actions, you MUST emit a tool call on its own line:\n"
+    "- ONLY emit a TOOL_CALL when Fas explicitly asks for a Windows OS, web, terminal, or task action; never emit TOOL_CALL for normal chat or questions.\n"
     "TOOL_CALL: tool_name({\"param\": \"value\"})\n"
     "Universal OS primitives:\n"
     "- os_input({\"keys\": [\"playpause\"]}) or os_input({\"keys\": [\"ctrl\", \"w\"], \"hotkey\": true}) or os_input({\"text\": str})\n"
@@ -60,14 +60,15 @@ def start_local_server() -> bool:
     cmd = [
         runner_path,
         "-m", model_path,
-        "-c", "1024",
+        "-c", os.getenv("LOCAL_BRAIN_CTX", "4096"),
         "-b", "512",
         "-ub", "256",
-        "-t", "2",
+        "-t", os.getenv("LOCAL_BRAIN_THREADS", "4"),
         "-fa", "on",
         "--parallel", "1",
-        "--reasoning", "off",
-        "--reasoning-budget", "0",
+        "--reasoning", os.getenv("LOCAL_BRAIN_REASONING", "on"),
+        "--reasoning-format", "deepseek",
+        "--reasoning-budget", os.getenv("LOCAL_BRAIN_REASONING_BUDGET", "1024"),
         "--port", str(port),
         "--host", "127.0.0.1",
     ]
@@ -116,7 +117,7 @@ def query_local_brain(system_prompt: str, user_text: str, history: list = None) 
     payload = json.dumps({
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": 150,
+        "max_tokens": int(os.getenv("LOCAL_BRAIN_MAX_TOKENS", "1536")),
     }).encode("utf-8")
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -124,11 +125,11 @@ def query_local_brain(system_prompt: str, user_text: str, history: list = None) 
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
+        with urllib.request.urlopen(req, timeout=float(os.getenv("LOCAL_BRAIN_TIMEOUT_SEC", "60.0"))) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            raw = data["choices"][0]["message"]["content"]
-            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-            return cleaned.strip().replace("*", "")
+            raw = data["choices"][0]["message"].get("content") or ""
+            cleaned = re.sub(r"<think>.*?(?:</think>|$)", "", raw, flags=re.DOTALL)
+            return cleaned.strip().replace("*", "") or None
     except Exception:
         return None
 

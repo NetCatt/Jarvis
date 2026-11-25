@@ -36,18 +36,39 @@ _VK_MAP = {
 for i in range(1, 13):
     _VK_MAP[f"f{i}"] = 0x6F + i
 
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
 class _KEYBDINPUT(ctypes.Structure):
     _fields_ = [
         ("wVk", wintypes.WORD),
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
     ]
 
 class _INPUT(ctypes.Structure):
     class _INPUT_UNION(ctypes.Union):
-        _fields_ = [("ki", _KEYBDINPUT)]
+        _fields_ = [
+            ("mi", _MOUSEINPUT),
+            ("ki", _KEYBDINPUT),
+            ("hi", _HARDWAREINPUT),
+        ]
     _anonymous_ = ("_u",)
     _fields_ = [
         ("type", wintypes.DWORD),
@@ -88,11 +109,13 @@ def os_input(keys: list[str] | str = None, text: str = None, hotkey: bool = True
                     time.sleep(0.01)
             results.append(f"Pressed {'+'.join(key_list)}")
     if text:
+        sz = ctypes.sizeof(_INPUT)
         for ch in text:
             scan = ord(ch)
             down = _INPUT(type=1, ki=_KEYBDINPUT(wVk=0, wScan=scan, dwFlags=0x0004, time=0, dwExtraInfo=0))
             up = _INPUT(type=1, ki=_KEYBDINPUT(wVk=0, wScan=scan, dwFlags=0x0004 | 0x0002, time=0, dwExtraInfo=0))
-            ctypes.windll.user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(_INPUT))
-            ctypes.windll.user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(_INPUT))
+            ctypes.windll.user32.SendInput(1, ctypes.byref(down), sz)
+            ctypes.windll.user32.SendInput(1, ctypes.byref(up), sz)
+            time.sleep(0.005)
         results.append(f"Typed '{text}'")
     return ", ".join(results) if results else "No keys or text specified."

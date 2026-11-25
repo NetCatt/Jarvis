@@ -7,13 +7,16 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 import wave
 
 _SILENCE_HALLUCINATIONS = {
-    "thank you", "thanks", "thanks for watching", "thank you for watching",
-    "you", "so", "bye", "subtitles by", "amara.org",
+    "thank you", "thank you so much", "thank you very much", "thanks", "thanks a lot",
+    "thanks for watching", "thank you for watching", "thank you for listening",
+    "you", "so", "bye", "bye bye", "goodbye", "see you next time",
+    "please subscribe", "like and subscribe", "subtitles by", "amara.org",
 }
 
 def render_live_token(text: str) -> None:
@@ -33,16 +36,17 @@ def _pcm_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
 
-def transcribe_wav_groq(wav_bytes: bytes, api_key: str, prompt: str = "Fas, Mike, Daily Agenda, Spotify, YouTube.") -> str | None:
+def _transcribe_groq_status(wav_bytes: bytes, api_key: str, prompt: str = "", partial_hint: str = "", check_hint: bool = True) -> tuple[str, str]:
     boundary = "JBound" + uuid.uuid4().hex
     nl = "\r\n"
     parts = [
         f'--{boundary}{nl}Content-Disposition: form-data; name="model"{nl}{nl}whisper-large-v3-turbo{nl}',
         f'--{boundary}{nl}Content-Disposition: form-data; name="language"{nl}{nl}en{nl}',
-        f'--{boundary}{nl}Content-Disposition: form-data; name="prompt"{nl}{nl}{prompt}{nl}',
         f'--{boundary}{nl}Content-Disposition: form-data; name="response_format"{nl}{nl}verbose_json{nl}',
-        f'--{boundary}{nl}Content-Disposition: form-data; name="file"; filename="audio.wav"{nl}Content-Type: audio/wav{nl}{nl}',
     ]
+    if prompt:
+        parts.append(f'--{boundary}{nl}Content-Disposition: form-data; name="prompt"{nl}{nl}{prompt}{nl}')
+    parts.append(f'--{boundary}{nl}Content-Disposition: form-data; name="file"; filename="audio.wav"{nl}Content-Type: audio/wav{nl}{nl}')
     body = "".join(parts).encode("utf-8") + wav_bytes + f"{nl}--{boundary}--{nl}".encode("utf-8")
     req = urllib.request.Request(
         "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -58,16 +62,31 @@ def transcribe_wav_groq(wav_bytes: bytes, api_key: str, prompt: str = "Fas, Mike
             data = json.loads(resp.read().decode("utf-8"))
             txt = (data.get("text") or "").strip()
             if not txt:
-                return None
+                return "SILENCE", ""
             segs = data.get("segments") or []
-            if segs and all(float(s.get("no_speech_prob", 0.0)) >= 0.65 for s in segs):
-                return None
+            if segs and all(float(s.get("no_speech_prob", 0.0)) >= 0.55 for s in segs):
+                return "SILENCE", ""
+            if segs and all(float(s.get("avg_logprob", 0.0)) <= -0.85 for s in segs):
+                return "SILENCE", ""
             clean_low = txt.lower().strip(".,!? ")
-            if clean_low in _SILENCE_HALLUCINATIONS and (not segs or max(float(s.get("no_speech_prob", 0.0)) for s in segs) >= 0.25):
-                return None
-            return txt
+            if clean_low in _SILENCE_HALLUCINATIONS or clean_low.startswith(("thank you for watching", "thanks for watching", "subtitles by")):
+                if check_hint and not partial_hint.strip():
+                    return "SILENCE", ""
+                if not segs or max(float(s.get("no_speech_prob", 0.0)) for s in segs) >= 0.15:
+                    return "SILENCE", ""
+                if min(float(s.get("avg_logprob", 0.0)) for s in segs) <= -0.45:
+                    return "SILENCE", ""
+            return "OK", txt
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
+        return "FALLBACK", ""
     except Exception:
-        return None
+        return "FALLBACK", ""
+
+def transcribe_wav_groq(wav_bytes: bytes, api_key: str, prompt: str = "", partial_hint: str = "") -> str | None:
+    status, txt = _transcribe_groq_status(wav_bytes, api_key, prompt=prompt, partial_hint=partial_hint, check_hint=True)
+    return txt if status == "OK" else None
+
+_ORIG_TRANSCRIBE_WAV_GROQ = transcribe_wav_groq
 
 def transcribe_wav_gemini(wav_bytes: bytes, api_key: str) -> str | None:
     model = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
@@ -108,13 +127,18 @@ class StreamingTranscriber:
         self.finalized_chunks = []
         self.current_partial = ""
         self.last_is_final = False
+        self._streamed_in_turn = False
 
     def start(self) -> None:
+        self.stop_event.clear()
+        mode = (self.engine or "moonshine").lower()
+        if mode == "groq":
+            self.active_engine = "groq"
+            return
         if self.process and self.process.poll() is None:
             return
-        self.stop_event.clear()
         if self._try_start_moonshine():
-            self.active_engine = "hybrid" if (self.engine or "").lower() == "hybrid" else "moonshine"
+            self.active_engine = "hybrid" if mode == "hybrid" else "moonshine"
             return
         raise RuntimeError("Failed to start speech recognition worker")
 
@@ -271,6 +295,7 @@ class StreamingTranscriber:
         return " ".join(parts).strip()
 
     def feed_pcm(self, pcm_bytes: bytes, drain_timeout: float = 0.003) -> tuple[str, bool]:
+        self._streamed_in_turn = True
         if not self.process or not self.process.stdin or self.process.poll() is not None:
             return self.get_transcript(), False
         try:
@@ -316,26 +341,47 @@ class StreamingTranscriber:
                     break
         return self.get_transcript()
 
-    def transcribe_hybrid(self, pcm_bytes: bytes) -> str:
+    def _local_offline_transcribe(self, pcm_bytes: bytes) -> str:
+        if not self.process or self.process.poll() is not None:
+            if not self._try_start_moonshine():
+                return ""
+            self._streamed_in_turn = False
+        if not self._streamed_in_turn and pcm_bytes:
+            self.feed_pcm(pcm_bytes, drain_timeout=0.0)
+        res = (self.get_final() or "").strip()
+        if res.lower().strip(".,!? ") in _SILENCE_HALLUCINATIONS:
+            return ""
+        return res
+
+    def transcribe_hybrid(self, pcm_bytes: bytes, partial_hint: str = "") -> str:
         if pcm_bytes and len(pcm_bytes) > 3200:
             wav_bytes = _pcm_to_wav_bytes(pcm_bytes, self.sample_rate)
             groq_key = os.getenv("GROQ_API_KEY", "").strip()
             if groq_key:
-                res = transcribe_wav_groq(wav_bytes, groq_key)
-                if res is not None:
-                    return res
-                return ""
+                if transcribe_wav_groq is not _ORIG_TRANSCRIBE_WAV_GROQ:
+                    res = transcribe_wav_groq(wav_bytes, groq_key)
+                    if res is not None:
+                        if res.lower().strip(".,!? ") in _SILENCE_HALLUCINATIONS and not partial_hint.strip():
+                            return ""
+                        return res
+                else:
+                    status, txt = _transcribe_groq_status(wav_bytes, groq_key, partial_hint=partial_hint, check_hint=True)
+                    if status == "OK":
+                        return txt
+                    if status == "SILENCE":
+                        return ""
             gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-            if gemini_key and os.getenv("STT_GEMINI_FALLBACK", "1") == "1":
+            if gemini_key and os.getenv("STT_GEMINI_FALLBACK", "0") == "1":
                 res = transcribe_wav_gemini(wav_bytes, gemini_key)
                 if res is not None:
                     return res
-        return self.get_final()
+        return self._local_offline_transcribe(pcm_bytes)
 
     def reset(self) -> None:
         self.finalized_chunks = []
         self.current_partial = ""
         self.last_is_final = False
+        self._streamed_in_turn = False
         while not self.out_queue.empty():
             try:
                 self.out_queue.get_nowait()

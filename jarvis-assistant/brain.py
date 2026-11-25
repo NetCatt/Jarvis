@@ -67,9 +67,9 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "search_files": "Search for files by name or keyword across workspace or directories.",
         "open_browser": "Open a URL in the browser.",
         "search_google": "Search Google in the browser.",
-        "play_music": "Play music or song.",
-        "play_youtube": "Play video or music on YouTube.",
-        "play_spotify": "Play track or artist on Spotify.",
+        "play_music": "Play song verbatim (keep words like 'Again' in track titles, e.g. 'Goodbye To A Lover Again').",
+        "play_youtube": "Play track/video on YouTube verbatim (keep words like 'Again' in title).",
+        "play_spotify": "Play track verbatim on Spotify (keep words like 'Again' in title).",
         "pause_music": "Pause, resume, or toggle music or media playback.",
         "next_track": "Skip to the next music or media track.",
         "prev_track": "Skip to the previous music or media track.",
@@ -81,6 +81,10 @@ def _build_tool_declarations(tool_functions: list) -> list[dict]:
         "os_launch": "Launch application, URI protocol, or system target.",
         "web_dispatch": "Dispatch search query or URL to browser across search engines.",
         "os_context": "Inspect system context including active window title, clipboard content, or RAM stats.",
+        "set_timer": "Set a countdown timer in seconds or natural duration like '5 minutes' with an optional label.",
+        "list_timers": "List currently running countdown timers and remaining seconds.",
+        "cancel_timer": "Cancel an active timer by label or cancel all timers.",
+        "quick_answer": "Get an immediate spoken answer for math calculations, current time/date, live weather, or factual web lookups.",
     }
     for fn in tool_functions:
         sig = inspect.signature(fn)
@@ -125,6 +129,112 @@ def _call_gemini_rest(contents: list, system_instruction: str = None, tools: lis
 _ORIG_CALL_GEMINI_REST = _call_gemini_rest
 
 
+def _build_openai_tools(tool_functions: list) -> list[dict]:
+    decls = _build_tool_declarations(tool_functions)
+    out = []
+    for d in decls:
+        params = dict(d.get("parameters") or {})
+        props = {k: {"type": v.get("type", "STRING").lower()} for k, v in (params.get("properties") or {}).items()}
+        schema = {"type": "object", "properties": props}
+        if params.get("required"):
+            schema["required"] = params["required"]
+        out.append({
+            "type": "function",
+            "function": {"name": d["name"], "description": d["description"][:96], "parameters": schema},
+        })
+    return out
+
+
+def _call_groq_chat(messages: list, tools: list = None, model: str = None, max_tokens: int = 1024) -> dict | None:
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return None
+    active_model = model or os.getenv("GROQ_BRAIN_MODEL", "qwen/qwen3.8-27b")
+    payload = {
+        "model": active_model,
+        "messages": messages,
+        "temperature": 0.25,
+        "max_tokens": max_tokens,
+    }
+    effort = os.getenv("GROQ_REASONING_EFFORT", "high").strip().lower()
+    if effort and ("qwen3" in active_model or "gpt-oss" in active_model):
+        payload["reasoning_effort"] = effort
+    if tools:
+        payload["tools"] = _build_openai_tools(tools)
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Jarvis/1.0",
+        },
+    )
+    timeout_sec = float(os.getenv("GROQ_BRAIN_TIMEOUT_SEC", "6.0"))
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+_ORIG_CALL_GROQ_CHAT = _call_groq_chat
+
+
+def _groq_converse_loop(system_prompt: str, history: list, user_text: str, max_steps: int) -> tuple[str | None, int, bool]:
+    msgs = [{"role": "system", "content": system_prompt}]
+    for h in history:
+        msgs.append({"role": ("user" if h["role"] == "user" else "assistant"), "content": h["text"]})
+    msgs.append({"role": "user", "content": user_text})
+    models = [
+        os.getenv("GROQ_BRAIN_MODEL", "qwen/qwen3.8-27b"),
+        os.getenv("GROQ_BRAIN_FALLBACK", "openai/gpt-oss-20b"),
+    ]
+    steps_taken = 0
+    chained = False
+    last_reply = None
+    for _ in range(max_steps):
+        resp = None
+        for m in models:
+            try:
+                resp = _call_groq_chat(msgs, tools=TOOL_FUNCTIONS, model=m)
+                if resp and resp.get("choices"):
+                    break
+            except Exception:
+                continue
+        if not resp or not resp.get("choices"):
+            return None, steps_taken, chained
+        msg = resp["choices"][0].get("message") or {}
+        tool_calls = msg.get("tool_calls") or []
+        if tool_calls:
+            tc = tool_calls[0]
+            fn_info = tc.get("function") or {}
+            call_name = fn_info.get("name", "")
+            raw_args = fn_info.get("arguments") or "{}"
+            try:
+                call_args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            except Exception:
+                call_args = {}
+            fn = TOOL_MAP.get(call_name)
+            if fn:
+                try:
+                    result = str(fn(**call_args))
+                except Exception as exc:
+                    result = f"Tool execution error: {exc}"
+            else:
+                result = f"Unknown tool: {call_name}"
+            last_reply = result
+            steps_taken += 1
+            if call_name in _CHAINABLE_TOOLS:
+                chained = True
+                msgs.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": [tc]})
+                msgs.append({"role": "tool", "tool_call_id": tc.get("id", "call_0"), "content": result})
+                continue
+            return result, steps_taken, chained
+        raw_content = re.sub(r"<think>.*?(?:</think>|$)", "", msg.get("content") or "", flags=re.DOTALL)
+        if raw_content.strip():
+            return _sanitize_spoken_reply(raw_content), steps_taken, chained
+        return last_reply, steps_taken, chained
+    return last_reply, steps_taken, chained
+
+
 def _build_system_prompt(session_id: str, user_text: str) -> str:
     state = get_active_state(session_id)
     directives = get_active_personality_directives()
@@ -145,9 +255,14 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
         f"User: {user_text}\nMike: {reply}"
     )
     contents = [{"role": "user", "parts": [{"text": prompt}]}]
+    text = ""
     try:
-        raw = _call_gemini_rest(contents)
-        text = raw.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        if _call_gemini_rest == _ORIG_CALL_GEMINI_REST and os.getenv("GROQ_API_KEY", "").strip():
+            raw_g = _call_groq_chat([{"role": "user", "content": prompt}], max_tokens=160)
+            text = (raw_g or {}).get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        if not text:
+            raw = _call_gemini_rest(contents)
+            text = raw.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
         clean_json = text.strip()
         if clean_json.startswith("```"):
             clean_json = clean_json.split("\n", 1)[-1].rsplit("\n", 1)[0].strip()
@@ -168,6 +283,16 @@ def _extract_state_update(session_id: str, user_text: str, reply: str) -> None:
 
 def _try_fast_action(user_text: str) -> str | None:
     low = user_text.lower().strip()
+    timer_m = re.search(r"(?:set|start)\s+(?:a\s+)?(?:timer|alarm)\s+(?:for\s+)?(.+?)(?:\s+(?:called|named|for)\s+([a-zA-Z0-9 ]+))?$", low)
+    if timer_m and re.search(r"\d+\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)", timer_m.group(1)):
+        from tools.daily import set_timer
+        return set_timer(timer_m.group(1).strip(" .!?"), label=(timer_m.group(2) or "").strip(" .!?"))
+    if any(k in low for k in ("cancel timer", "stop timer", "clear timers", "cancel all timers")):
+        from tools.daily import cancel_timer
+        return cancel_timer()
+    if any(k in low for k in ("list timers", "active timers", "how much time left")):
+        from tools.daily import list_timers
+        return list_timers()
     vol_match = re.search(r"(?:turn\s+(?:up\s+|down\s+)?|set\s+|put\s+)?(?:the\s+)?volume\s+(?:to\s+|up\s+to\s+|at\s+)?(\d{1,3})\s*(?:%|percent)?", low)
     if vol_match and any(k in low for k in ("volume", "vol")):
         from tools.media import set_volume
@@ -190,11 +315,7 @@ def _try_fast_action(user_text: str) -> str | None:
         from tools.apps import search_files
         query = re.sub(r"^(search files for|find files with|search files)\s*", "", low).strip("?.! ")
         return search_files(query)
-    if any(k in low for k in ("open youtube", "turn on youtube", "launch youtube", "play youtube", "open a song on youtube")):
-        from tools.media import open_browser
-        open_browser("https://www.youtube.com")
-        return "Opening YouTube for you now, Fas."
-    if any(k in low for k in ("can you turn on youtube", "can you open youtube")):
+    if any(k in low for k in ("open youtube", "turn on youtube", "launch youtube", "can you turn on youtube", "can you open youtube")) and len(low.split()) <= 5:
         from tools.media import open_browser
         open_browser("https://www.youtube.com")
         return "Opening YouTube for you now, Fas."
@@ -206,13 +327,22 @@ def _try_fast_action(user_text: str) -> str | None:
     )):
         from tools.os_context import os_context
         return os_context("now_playing")
-    if "open a song" in low or "play a song" in low or "play music" in low or low.startswith("play "):
-        from tools.media import play_music
-        cleaned = re.sub(r"^(can you\s+)?(open\s+a\s+song(\s+for\s+me)?|play\s+a\s+song(\s+for\s+me)?|play\s+music|play)\s*", "", low).strip("?.! ")
-        return play_music(cleaned or "lofi beats")
-    if any(k in low for k in ("pause music", "pause the music", "stop the music", "stop music", "resume music", "resume the music", "toggle music", "pause playback", "pause my music", "stop playback")):
+    if any(k in low for k in (
+        "didn't start playing", "didnt start playing",
+        "pause music", "pause the music", "stop the music", "stop music",
+        "resume music", "resume the music", "toggle music", "pause playback",
+        "pause my music", "stop playback"
+    )) or low.rstrip(".!? ") in ("not playing", "start playing"):
         from tools.media import pause_music
         return pause_music()
+    if "open a song" in low or "play a song" in low or "play music" in low or low.startswith(("play ", "can you play ", "could you play ", "please play ", "start playing ")):
+        from tools.media import play_music
+        cleaned = re.sub(r"^(?:can you\s+|could you\s+|please\s+)?(?:open\s+a\s+song(?:\s+for\s+me)?(?:\s+on\s+(?:spotify|youtube))?|play\s+a\s+song(?:\s+for\s+me)?|play\s+music|start\s+playing|play)\s*", "", low).strip("?.! ")
+        if "youtube" in low and "youtube" not in cleaned:
+            return play_music(cleaned or "lofi beats", platform="youtube")
+        if "spotify" in low and "spotify" not in cleaned:
+            return play_music(cleaned or "lofi beats", platform="spotify")
+        return play_music(cleaned or "lofi beats")
     if any(k in low for k in ("next track", "next song", "skip song", "skip track", "skip this song")):
         from tools.media import next_track
         return next_track()
@@ -332,7 +462,22 @@ def converse(session_id: str, user_text: str) -> str:
         append_turn(session_id, "mike", reply, None)
         return reply
 
-    mode = os.getenv("ROUTING_MODE", os.getenv("LOCAL_BRAIN_FIRST", "hybrid")).lower()
+    mode = os.getenv("ROUTING_MODE", os.getenv("LOCAL_BRAIN_FIRST", "groq_hybrid")).lower()
+    if mode in ("groq", "groq_hybrid", "hybrid", "auto") and os.getenv("GROQ_API_KEY", "").strip() and (_call_gemini_rest == _ORIG_CALL_GEMINI_REST or _call_groq_chat != _ORIG_CALL_GROQ_CHAT):
+        groq_reply, groq_steps, groq_chained = _groq_converse_loop(
+            system_prompt, history, user_text, int(os.getenv("MAX_AGENTIC_STEPS", "3"))
+        )
+        if groq_reply:
+            if groq_steps >= 1 and not groq_chained:
+                append_turn(session_id, "user", user_text, None)
+                append_turn(session_id, "mike", groq_reply, None)
+            else:
+                append_turn(session_id, "user", user_text, embed(user_text))
+                append_turn(session_id, "mike", groq_reply, embed(groq_reply))
+                threading.Thread(target=_extract_state_update, args=(session_id, user_text, groq_reply), daemon=True).start()
+            _maybe_run_memory_upkeep(session_id)
+            return groq_reply
+
     local_target = (mode in ("true", "1", "local")) or (mode in ("hybrid", "auto") and _is_system_intent(user_text))
     if local_target and _call_gemini_rest == _ORIG_CALL_GEMINI_REST:
         try:

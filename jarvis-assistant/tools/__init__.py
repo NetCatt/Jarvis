@@ -1,4 +1,5 @@
 from tools.apps import open_app, open_folder, search_files
+from tools.daily import cancel_timer, list_timers, quick_answer, set_timer
 from tools.dev_sync import sync_coding_progress
 from tools.dispatch import dispatch_coding_agent
 from tools.media import change_volume, get_volume, next_track, open_browser, pause_music, play_music, play_spotify, play_youtube, prev_track, search_google, set_volume
@@ -39,5 +40,9 @@ TOOL_FUNCTIONS = [
     os_launch,
     web_dispatch,
     os_context,
+    set_timer,
+    list_timers,
+    cancel_timer,
+    quick_answer,
 ]
 TOOL_MAP = {fn.__name__: fn for fn in TOOL_FUNCTIONS}

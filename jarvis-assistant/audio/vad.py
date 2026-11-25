@@ -4,6 +4,13 @@ import math
 import os
 import webrtcvad
 
+def frame_rms(pcm_frame: bytes) -> float:
+    samples = array.array("h")
+    samples.frombytes(pcm_frame)
+    if not samples:
+        return 0.0
+    return math.sqrt(sum(s * s for s in samples) / len(samples))
+
 class DynamicVoiceEndpoint:
     def __init__(
         self,
@@ -32,6 +39,8 @@ class DynamicVoiceEndpoint:
         self.last_text = ""
         self.triggered = False
         self.noise_floor = 0.0
+        self._hp_prev_x = 0.0
+        self._hp_prev_y = 0.0
         self.min_rms = float(os.getenv("VAD_MIN_RMS", "120"))
         cap_sec = max_duration_sec if max_duration_sec is not None else float(os.getenv("VAD_MAX_DURATION_SEC", "12"))
         self.max_duration_ms = int(cap_sec * 1000)
@@ -62,21 +71,39 @@ class DynamicVoiceEndpoint:
         return text
 
     def _frame_rms(self, pcm_frame: bytes) -> float:
+        return frame_rms(pcm_frame)
+
+    def _highpass_frame(self, pcm_frame: bytes) -> bytes:
         samples = array.array("h")
         samples.frombytes(pcm_frame)
         if not samples:
-            return 0.0
-        return math.sqrt(sum(s * s for s in samples) / len(samples))
+            return pcm_frame
+        px, py = self._hp_prev_x, self._hp_prev_y
+        out = array.array("h")
+        for x in samples:
+            y = 0.955 * (py + x - px)
+            px = x
+            py = y
+            iv = int(y)
+            if iv > 32767:
+                iv = 32767
+            elif iv < -32768:
+                iv = -32768
+            out.append(iv)
+        self._hp_prev_x, self._hp_prev_y = px, py
+        return out.tobytes()
 
     def process_frame(self, pcm_frame: bytes, current_transcript: str = "") -> tuple[bool, bool]:
         if len(pcm_frame) < self.expected_frame_len:
             pcm_frame = pcm_frame.ljust(self.expected_frame_len, b"\x00")
         elif len(pcm_frame) > self.expected_frame_len:
             pcm_frame = pcm_frame[:self.expected_frame_len]
-        rms = self._frame_rms(pcm_frame)
-        vad_speech = self.vad.is_speech(pcm_frame, self.sample_rate)
-        if not self.triggered and not vad_speech:
-            self.noise_floor = 0.94 * self.noise_floor + 0.06 * rms
+        filtered_frame = self._highpass_frame(pcm_frame)
+        rms = frame_rms(filtered_frame)
+        vad_speech = self.vad.is_speech(filtered_frame, self.sample_rate)
+        if not self.triggered and (not vad_speech or rms < max(self.min_rms, self.noise_floor * 2.0)):
+            alpha = 0.06 if (not vad_speech or self.noise_floor > 0.0) else 0.15
+            self.noise_floor = (1.0 - alpha) * self.noise_floor + alpha * rms
         raw_speech = vad_speech and (rms >= max(self.min_rms, self.noise_floor * 2.2))
         self.hangover_buffer.append(raw_speech)
         ratio = sum(self.hangover_buffer) / len(self.hangover_buffer)
@@ -104,7 +131,7 @@ class DynamicVoiceEndpoint:
         last_word = words[-1].rstrip(" .,!?") if words else ""
         if last_word in self.conjunctions:
             threshold_ms = max(self.base_silence_ms + 600, 1400)
-        elif len(words) < 3:
+        elif 0 < len(words) < 3:
             threshold_ms = max(self.base_silence_ms + 400, 1200)
         else:
             threshold_ms = self.base_silence_ms

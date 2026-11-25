@@ -283,6 +283,7 @@ def test_media_playback_controls(monkeypatch):
     fast_pause = _try_fast_action("pause my music")
     assert fast_pause and "playback" in fast_pause.lower()
 
+    monkeypatch.setenv("DEFAULT_MUSIC_PLATFORM", "youtube")
     monkeypatch.setattr("webbrowser.open", lambda *args, **kwargs: True)
     from tools.media import play_music
     res_music = play_music("metallica")
@@ -320,6 +321,7 @@ def test_hybrid_and_moonshine_stt_transcribe(monkeypatch):
     monkeypatch.setattr("audio.stt.transcribe_wav_groq", lambda wav, key: "check project status")
     assert stt.transcribe_hybrid(b"\x01\x00" * 2400) == "check project status"
     monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("STT_GEMINI_FALLBACK", "1")
     monkeypatch.setattr("audio.stt.transcribe_wav_gemini", lambda wav, key: "gemini fallback transcript")
     monkeypatch.setenv("GEMINI_API_KEY", "gem_key")
     assert stt.transcribe_hybrid(b"\x01\x00" * 2400) == "gemini fallback transcript"
